@@ -5,4 +5,6 @@ class AppRoutes {
   static const String home = '/home';
   static const String createRequest = '/create-request';
   static const String availableRequests = '/available-requests';
+  static const String adminDashboard = '/admin';
 }
+

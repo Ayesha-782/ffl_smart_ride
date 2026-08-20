@@ -545,13 +545,6 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
   // TAB 1: OPEN REQUESTS (FOR DRIVERS TO ACCEPT)
   // ---------------------------------------------------------------------------
   Widget _buildOpenRequestCard(RideRequest ride) {
-    final passenger = ride.passenger;
-    final rawPassengerName = passenger?.fullName.trim();
-    final passengerName = (rawPassengerName != null && rawPassengerName.isNotEmpty && rawPassengerName.toLowerCase() != 'colleague')
-        ? rawPassengerName
-        : (passenger?.employeeId != null && passenger!.employeeId.isNotEmpty ? 'Employee (${passenger.employeeId})' : 'Passenger');
-    final phone = passenger?.phone ?? 'No phone listed';
-
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
@@ -565,80 +558,102 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const CircleAvatar(
-                  backgroundColor: AppColors.primaryLight,
-                  child: Icon(Icons.person, color: AppColors.primary),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        passengerName,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        phone,
-                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                      ),
-                    ],
-                  ),
-                ),
-                if (ride.pickupStopOrder != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryLight,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      'Stop #${ride.pickupStopOrder}',
-                      style: const TextStyle(
-                        color: AppColors.primaryDark,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-              ],
+            // Embedded Passenger Profile Card with Name, ID, Phone and Stop
+            ProfileCard(
+              profileId: ride.passengerId,
+              profile: ride.passenger,
+              isDriver: false,
+              pickupStopName: ride.pickupLocation,
+              houseAddress: ride.officeLocation,
+              compact: true,
             ),
-            const Divider(height: 20),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
 
-            // Pickup & Destination
+            // Pickup & Destination Details
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(Icons.location_on_outlined, color: AppColors.primary, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Pickup: ${ride.pickupLocation}', style: const TextStyle(fontSize: 13)),
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        const TextSpan(
+                          text: 'Pickup: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                        ),
+                        TextSpan(
+                          text: ride.pickupLocation,
+                          style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
+                if (ride.pickupStopOrder != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryLight,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Stop #${ride.pickupStopOrder}',
+                      style: const TextStyle(
+                        color: AppColors.primaryDark,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(Icons.business_outlined, color: AppColors.primary, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Destination: ${ride.officeLocation}', style: const TextStyle(fontSize: 13)),
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        const TextSpan(
+                          text: 'Destination: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                        ),
+                        TextSpan(
+                          text: ride.officeLocation,
+                          style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Row(
               children: [
                 const Icon(Icons.access_time, color: AppColors.primary, size: 18),
                 const SizedBox(width: 8),
-                Text(_formatDateTime(ride.leavingTime), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      const TextSpan(
+                        text: 'Leaving: ',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                      ),
+                      TextSpan(
+                        text: _formatDateTime(ride.leavingTime),
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
 
@@ -646,12 +661,25 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.border),
                 ),
-                child: Text('Note: ${ride.additionalNote}', style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline, size: 16, color: AppColors.textSecondary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Note: ${ride.additionalNote}',
+                        style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppColors.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
 
@@ -661,28 +689,28 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
                 final isInFlight = _inFlightAcceptIds.contains(ride.id);
                 return SizedBox(
                   width: double.infinity,
-                  height: 44,
+                  height: 46,
                   child: ElevatedButton.icon(
                     onPressed: isInFlight ? null : () => _acceptRide(ride),
                     icon: isInFlight
                         ? const SizedBox(
-                            height: 16,
-                            width: 16,
+                            width: 18,
+                            height: 18,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               color: Colors.white,
                             ),
                           )
-                        : const Icon(Icons.directions_car_filled, size: 18),
+                        : const Icon(Icons.directions_car, size: 18),
                     label: Text(
-                      isInFlight ? 'Offering Lift...' : 'Offer Ride / Accept Passenger',
+                      isInFlight ? 'Offering Ride...' : 'Offer Ride / Accept Passenger',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.6),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                   ),
                 );
@@ -881,6 +909,7 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
     final isAccepted = ride.status == 'accepted';
     final isCancelled = ride.status == 'cancelled';
     final isCompleted = ride.status == 'completed';
+    final isSlotOrStatusExpired = ride.status == 'expired' || ride.isExpired;
 
     // Calculate 5-minute confirmation countdown
     final remainSec = ride.remainingConfirmationSeconds;
@@ -888,12 +917,16 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
     final remainM = (remainSec ~/ 60).toString().padLeft(2, '0');
     final remainS = (remainSec % 60).toString().padLeft(2, '0');
 
+    final showDeleteOption = isCancelled || isCompleted || isSlotOrStatusExpired;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: isExpired ? AppColors.error : (hasDriver ? AppColors.primary : AppColors.border),
+          color: (isExpired || isSlotOrStatusExpired)
+              ? AppColors.error.withValues(alpha: 0.7)
+              : (hasDriver ? AppColors.primary : AppColors.border),
           width: hasDriver ? 1.5 : 1.0,
         ),
       ),
@@ -923,7 +956,15 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
                     ],
                   ),
                 ),
-                _buildStatusChip(ride.status),
+                _buildStatusChip(isSlotOrStatusExpired && ride.status == 'pending' ? 'expired' : ride.status),
+                if (showDeleteOption)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 20),
+                    tooltip: 'Delete Request',
+                    onPressed: () => _deleteRequest(ride.id),
+                    padding: const EdgeInsets.only(left: 6),
+                    constraints: const BoxConstraints(),
+                  ),
               ],
             ),
             const Divider(height: 20),
@@ -1077,7 +1118,7 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
                   ),
                 ],
               ),
-            ] else if (ride.status == 'pending') ...[
+            ] else if (ride.status == 'pending' && !isSlotOrStatusExpired) ...[
               SizedBox(
                 width: double.infinity,
                 height: 42,
@@ -1091,16 +1132,20 @@ class _AvailableRequestsScreenState extends State<AvailableRequestsScreen>
                   ),
                 ),
               ),
-            ] else if (isCancelled || isCompleted) ...[
-              // Delete permanently option for cancelled or completed requests
+            ] else if (showDeleteOption) ...[
+              // Delete permanently option for expired, cancelled or completed requests
               SizedBox(
                 width: double.infinity,
-                height: 40,
+                height: 42,
                 child: OutlinedButton.icon(
                   onPressed: () => _deleteRequest(ride.id),
-                  icon: const Icon(Icons.delete_outline, size: 16, color: AppColors.error),
+                  icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.error),
                   label: Text(
-                    isCancelled ? 'Delete Cancelled Request' : 'Delete Completed Record',
+                    isCancelled
+                        ? 'Delete Cancelled Request'
+                        : (isSlotOrStatusExpired
+                            ? 'Delete Expired Request'
+                            : 'Delete Completed Record'),
                     style: const TextStyle(color: AppColors.error, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   style: OutlinedButton.styleFrom(

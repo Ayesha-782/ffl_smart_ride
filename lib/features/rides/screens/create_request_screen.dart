@@ -40,7 +40,7 @@ class CreateRequestScreen extends StatefulWidget {
 class _CreateRequestScreenState extends State<CreateRequestScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  DateTime _selectedDate = DateTime.now();
+  final DateTime _selectedDate = DateTime.now();
   RideSlot _selectedSlot = RideSlot.slots[0];
   TimeOfDay _selectedTime = const TimeOfDay(hour: 7, minute: 30);
   bool _loading = false;
@@ -76,7 +76,6 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
 
     if (activeSlot != null) {
       _selectedSlot = activeSlot;
-      _selectedDate = now;
       // Round up to next 15-min interval inside this slot
       final currentMinutes = now.hour * 60 + now.minute;
       final slotEndMinutes = activeSlot.end.hour * 60 + activeSlot.end.minute;
@@ -84,24 +83,19 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       if (nextMin > slotEndMinutes) nextMin = slotEndMinutes;
       _selectedTime = TimeOfDay(hour: nextMin ~/ 60, minute: nextMin % 60);
     } else {
-      // Find upcoming slot today or tomorrow morning
+      // Find upcoming slot today
       final currentMinutes = now.hour * 60 + now.minute;
       if (currentMinutes < 7 * 60) {
         _selectedSlot = RideSlot.slots[0]; // Morning
-        _selectedDate = now;
         _selectedTime = const TimeOfDay(hour: 7, minute: 30);
       } else if (currentMinutes < 12 * 60 + 30) {
         _selectedSlot = RideSlot.slots[1]; // Lunch
-        _selectedDate = now;
         _selectedTime = const TimeOfDay(hour: 12, minute: 30);
       } else if (currentMinutes < 16 * 60 + 30) {
         _selectedSlot = RideSlot.slots[2]; // Evening
-        _selectedDate = now;
         _selectedTime = const TimeOfDay(hour: 16, minute: 30);
       } else {
-        // Tomorrow morning
         _selectedSlot = RideSlot.slots[0];
-        _selectedDate = now.add(const Duration(days: 1));
         _selectedTime = const TimeOfDay(hour: 7, minute: 30);
       }
     }
@@ -215,21 +209,6 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     });
   }
 
-  Future<void> _chooseDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 30)),
-      initialDate: _selectedDate.isBefore(DateTime.now()) ? DateTime.now() : _selectedDate,
-    );
-
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedDate = picked;
-      });
-    }
-  }
-
   Future<void> _submitRequest() async {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -277,7 +256,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     if (departure.isBefore(DateTime.now().subtract(const Duration(minutes: 5)))) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Cannot request a ride in a past time slot. Please choose an upcoming slot or date.'),
+          content: Text('Cannot request a ride in a past time slot. Please choose an upcoming slot or departure time.'),
           backgroundColor: AppColors.error,
         ),
       );
@@ -338,16 +317,6 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     );
   }
 
-  bool _isToday(DateTime d) {
-    final now = DateTime.now();
-    return d.year == now.year && d.month == now.month && d.day == now.day;
-  }
-
-  bool _isTomorrow(DateTime d) {
-    final tom = DateTime.now().add(const Duration(days: 1));
-    return d.year == tom.year && d.month == tom.month && d.day == tom.day;
-  }
-
   @override
   Widget build(BuildContext context) {
     final isSameLocation = _selectedPickupOption != null &&
@@ -355,6 +324,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         _selectedPickupOption!.id == _selectedDestinationOption!.id;
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('I Need a Ride'),
@@ -364,7 +334,8 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 50),
           child: Form(
             key: _formKey,
             child: Column(
@@ -523,60 +494,56 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
                 const SizedBox(height: 16),
 
                 // ==========================================
-                // 3. TRAVEL DATE SELECTOR
+                // 3. AUTOMATIC TRAVEL DATE (1-DAY COMMUTE CYCLE)
                 // ==========================================
-                InkWell(
-                  onTap: _loading ? null : _chooseDate,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: AppColors.border),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.calendar_today_rounded, size: 20, color: AppColors.primary),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Travel Date',
-                                style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${_selectedDate.day.toString().padLeft(2, '0')}/${_selectedDate.month.toString().padLeft(2, '0')}/${_selectedDate.year}${_isToday(_selectedDate) ? ' (Today)' : (_isTomorrow(_selectedDate) ? ' (Tomorrow)' : '')}',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Text(
-                            'Change Date',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primaryDark,
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.today_rounded, size: 20, color: AppColors.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Travel Date (1-Day Commute Cycle)',
+                              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
                             ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${_selectedDate.day.toString().padLeft(2, '0')}/${_selectedDate.month.toString().padLeft(2, '0')}/${_selectedDate.year} (Today)',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryLight,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'Today Only',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primaryDark,
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -639,7 +606,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
                 const SizedBox(height: 16),
 
                 // ==========================================
-                // 5. DEPARTURE TIME SELECTION (STEP 2: WITHIN SLOT)
+                // 5. DEPARTURE TIME SELECTION (WITHIN SLOT)
                 // ==========================================
                 Container(
                   padding: const EdgeInsets.all(14),

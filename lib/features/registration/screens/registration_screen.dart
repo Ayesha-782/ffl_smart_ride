@@ -109,10 +109,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         ),
       );
 
-      // If user session is active immediately, route to /home
+      // If user session is active immediately, route through AuthGate
       if (response.session != null) {
         Navigator.of(context).pushNamedAndRemoveUntil(
-          AppRoutes.home,
+          AppRoutes.authGate,
           (route) => false,
         );
       } else {
@@ -174,7 +174,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       ),
       prefixIcon: Icon(icon, color: AppColors.primary, size: 20),
       filled: true,
-      fillColor: const Color(0xFFF8FAFC),
+      fillColor: AppColors.surface,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -194,7 +194,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9),
+      resizeToAvoidBottomInset: true,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textPrimary,
@@ -219,6 +220,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 24),
           child: Center(
             child: AuthCard(

@@ -61,9 +61,9 @@ class _LoginScreenState extends State<LoginScreen> {
         throw Exception('Login failed. Please verify your credentials.');
       }
 
-      // Route to Home and clear login stack
+      // Route through AuthGate for role-based dashboard redirection
       Navigator.of(context).pushNamedAndRemoveUntil(
-        AppRoutes.home,
+        AppRoutes.authGate,
         (route) => false,
       );
     } catch (error) {
@@ -216,22 +216,29 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9), // Subtle corporate slate-tinted background
+      resizeToAvoidBottomInset: true,
+      backgroundColor: AppColors.background,
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                AuthCard(
-                  maxWidth: 460,
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 48, // 48 = vertical padding (24*2)
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    AuthCard(
+                      maxWidth: 460,
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
                               // 1. Branding Header
                               const AuthHeader(
                                 title: 'Welcome Back 👋',
@@ -390,8 +397,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     ],
                   ),
                 ),
-              ),
-            ),
-          );
+              );
+            },
+          ),
+        ),
+      );
   }
 }

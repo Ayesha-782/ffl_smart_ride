@@ -7,11 +7,14 @@ class UserProfile {
   final String? email;
   final String? phone;
   final String? homeAddress;
+  final String? nationalId;
   final String? pickupStopId;
   final int? pickupStopOrder;
   final String? officeLocation;
   final String? vehicleNumber;
   final bool hasVehicle;
+  final String role; // 'user', 'admin', 'super_admin'
+  final bool isActive;
   final Vehicle? vehicle;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -23,15 +26,22 @@ class UserProfile {
     this.email,
     this.phone,
     this.homeAddress,
+    this.nationalId,
     this.pickupStopId,
     this.pickupStopOrder,
     this.officeLocation,
     this.vehicleNumber,
     this.hasVehicle = false,
+    this.role = 'user',
+    this.isActive = true,
     this.vehicle,
     this.createdAt,
     this.updatedAt,
   });
+
+  bool get isAdmin => role == 'admin' || role == 'super_admin';
+  bool get isSuperAdmin => role == 'super_admin';
+  bool get hasAdminPrivileges => isAdmin;
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     Vehicle? parsedVehicle;
@@ -50,6 +60,7 @@ class UserProfile {
       email: json['email'] as String?,
       phone: json['phone'] as String?,
       homeAddress: json['home_address'] as String?,
+      nationalId: json['national_id'] as String?,
       pickupStopId: json['pickup_stop_id'] as String?,
       pickupStopOrder: (json['pickup_stop_order'] as num?)?.toInt(),
       officeLocation: json['office_location'] as String?,
@@ -58,6 +69,8 @@ class UserProfile {
           (parsedVehicle != null ||
               (json['vehicle_number'] != null &&
                   json['vehicle_number'].toString().isNotEmpty)),
+      role: json['role'] as String? ?? 'user',
+      isActive: (json['is_active'] as bool?) ?? true,
       vehicle: parsedVehicle,
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())
@@ -76,11 +89,14 @@ class UserProfile {
       if (email != null) 'email': email,
       if (phone != null) 'phone': phone,
       if (homeAddress != null) 'home_address': homeAddress,
+      if (nationalId != null) 'national_id': nationalId,
       if (pickupStopId != null) 'pickup_stop_id': pickupStopId,
       if (pickupStopOrder != null) 'pickup_stop_order': pickupStopOrder,
       if (officeLocation != null) 'office_location': officeLocation,
       if (vehicleNumber != null) 'vehicle_number': vehicleNumber,
       'has_vehicle': hasVehicle,
+      'role': role,
+      'is_active': isActive,
     };
   }
 
@@ -91,11 +107,14 @@ class UserProfile {
     String? email,
     String? phone,
     String? homeAddress,
+    String? nationalId,
     String? pickupStopId,
     int? pickupStopOrder,
     String? officeLocation,
     String? vehicleNumber,
     bool? hasVehicle,
+    String? role,
+    bool? isActive,
     Vehicle? vehicle,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -107,11 +126,14 @@ class UserProfile {
       email: email ?? this.email,
       phone: phone ?? this.phone,
       homeAddress: homeAddress ?? this.homeAddress,
+      nationalId: nationalId ?? this.nationalId,
       pickupStopId: pickupStopId ?? this.pickupStopId,
       pickupStopOrder: pickupStopOrder ?? this.pickupStopOrder,
       officeLocation: officeLocation ?? this.officeLocation,
       vehicleNumber: vehicleNumber ?? this.vehicleNumber,
       hasVehicle: hasVehicle ?? this.hasVehicle,
+      role: role ?? this.role,
+      isActive: isActive ?? this.isActive,
       vehicle: vehicle ?? this.vehicle,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

@@ -111,7 +111,7 @@ void main() {
       expect(RideSlot.formatTimeOfDay(eveningIntervals.last), equals('5:30 PM'));
     });
 
-    testWidgets('CreateRequestScreen renders slot selection and departure time chips strictly within slots', (tester) async {
+    testWidgets('CreateRequestScreen renders active slot display and departure time chips strictly within slots', (tester) async {
       tester.view.physicalSize = const Size(1200, 2000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -124,35 +124,44 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Verify slot selection & time selection headers
-      expect(find.text('1. Official Operating Slot'), findsOneWidget);
-      expect(find.text('Morning Commute (07:00 AM – 09:00 AM)'), findsWidgets);
-      expect(find.text('Lunch / Afternoon (12:30 PM – 02:30 PM)'), findsWidgets);
-      expect(find.text('Evening Return (04:30 PM – 05:30 PM)'), findsWidgets);
-      expect(find.textContaining('2. Select Departure Time'), findsOneWidget);
+      // Verify automatic 1-day cycle travel date header (no date picker button)
+      expect(find.textContaining('Travel Date (1-Day Commute Cycle)'), findsOneWidget);
+      expect(find.text('Today Only'), findsOneWidget);
+      expect(find.text('Change Date'), findsNothing);
 
-      // Tap Morning slot and verify morning time chips are displayed
-      final morningFinder = find.text('Morning Commute (07:00 AM – 09:00 AM)').first;
-      await tester.ensureVisible(morningFinder);
-      await tester.tap(morningFinder);
-      await tester.pumpAndSettle();
+      // Verify active slot display & departure time selection headers
+      expect(find.text('Active Slot'), findsOneWidget);
+      expect(find.text('Departure Time'), findsOneWidget);
+      expect(find.text('Auto'), findsOneWidget);
 
-      expect(find.text('7:00 AM'), findsOneWidget);
-      expect(find.text('8:00 AM'), findsOneWidget);
-      expect(find.text('9:00 AM'), findsOneWidget);
+      // Verify Scheduled summary displays active departure time
+      expect(find.textContaining('Scheduled:'), findsOneWidget);
+    });
 
-      // Tap Evening slot and verify evening time chips are displayed
-      final eveningFinder = find.text('Evening Return (04:30 PM – 05:30 PM)').first;
-      await tester.ensureVisible(eveningFinder);
-      await tester.tap(eveningFinder);
-      await tester.pumpAndSettle();
+    test('Expired ride request is properly identified and qualifies for delete action', () {
+      final now = DateTime.now();
+      final expiredPending = RideRequest(
+        id: 'exp-req-1',
+        passengerId: 'p-1',
+        pickupLocation: 'A Type',
+        officeLocation: 'Gate 3',
+        leavingTime: now.subtract(const Duration(hours: 4)),
+        status: 'pending',
+      );
 
-      expect(find.text('4:30 PM'), findsOneWidget);
-      expect(find.text('5:00 PM'), findsOneWidget);
-      expect(find.text('5:30 PM'), findsOneWidget);
+      expect(expiredPending.isExpired, isTrue);
 
-      // Verify Scheduled summary displays active slot
-      expect(find.textContaining('Evening Return'), findsWidgets);
+      final explicitExpired = RideRequest(
+        id: 'exp-req-2',
+        passengerId: 'p-2',
+        pickupLocation: 'B Type',
+        officeLocation: 'Gate 3',
+        leavingTime: now.subtract(const Duration(hours: 1)),
+        status: 'expired',
+      );
+
+      expect(explicitExpired.isExpired, isTrue);
+      expect(explicitExpired.status, equals('expired'));
     });
   });
 }

@@ -1,17 +1,47 @@
-# ffl_smart_ride
+# FFL Smart Ride - Employee Carpool & Environmental Mobility Platform
 
-A new Flutter project.
+Smart carpooling application for employees commuting between the Township residential area and the FFL Manufacturing Plant, tracking verified CO₂ and fuel savings with an immutable audit trail.
 
-## Getting Started
+---
 
-This project is a starting point for a Flutter application.
+## 🛡️ Admin & Super Admin Dashboard
 
-A few resources to get you started if this is your first Flutter project:
+The application includes a fully dedicated Admin & Super Admin Dashboard separate from the commuter experience:
+- **Role-Based Auth Gate**: Automatically directs `'admin'` and `'super_admin'` roles to the Admin Shell and regular `'user'` roles to the commuter interface.
+- **Environmental Analytics**: Real-time summary metrics, interactive `fl_chart` visualizations (CO₂ reduction trend, completed rides over time, top contributors), and immutable leaderboards from `ride_completion_log`.
+- **PDF Report Generation**: Downloadable and printable executive audit reports via `pdf` and `printing` packages.
+- **User & Admin Management**: Pre-register employees, manage vehicle registrations, soft-deactivate accounts, and delegate administrator permissions.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+---
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 🧪 Development & Testing Admin Account
+
+> [!WARNING]
+> **DEVELOPMENT / TEST ONLY ACCOUNT**
+> The pre-made admin account below is provided solely for local testing and demonstration.
+> **DO NOT USE IN PRODUCTION. Remove or rotate credentials prior to real deployment.**
+
+| Field | Value |
+| :--- | :--- |
+| **Email** | `admin11@gmail.com` |
+| **Password** | `admin11` |
+| **Role** | `admin` |
+| **Vehicle** | None (Demonstrates non-driver admin account resilience) |
+
+### How to Seed in Supabase:
+Run the SQL script [`database/seed_admin.sql`](database/seed_admin.sql) directly in your [Supabase SQL Editor](https://supabase.com/dashboard/project/_/sql).
+
+---
+
+## 🚀 Running the App
+
+```bash
+# Get dependencies
+flutter pub get
+
+# Run unit & widget tests
+flutter test
+
+# Run app
+flutter run
+```

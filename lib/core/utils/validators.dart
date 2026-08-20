@@ -67,11 +67,22 @@ class Validators {
 
   static String? validatePhone(String? value) {
     if (value == null || value.trim().isEmpty) {
-      return 'Please enter your phone number';
+      return 'Please enter phone number';
     }
     final digits = value.replaceAll(RegExp(r'\D'), '');
-    if (digits.length < 7 || digits.length > 15) {
-      return 'Please enter a valid phone number';
+    if (digits.length < 10 || digits.length > 13) {
+      return 'Enter valid mobile number (e.g. 0300-1234567)';
+    }
+    return null;
+  }
+
+  static String? validateCnic(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'National ID / CNIC is required';
+    }
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 13) {
+      return 'CNIC must be 13 digits (e.g. 35201-1234567-1)';
     }
     return null;
   }

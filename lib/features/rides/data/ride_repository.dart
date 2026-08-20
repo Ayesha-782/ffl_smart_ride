@@ -585,7 +585,21 @@ class RideRepository {
         final prof = UserProfile.fromJson(json as Map<String, dynamic>);
         profileMap[prof.id] = prof;
       }
-    } catch (_) {}
+    } catch (_) {
+      try {
+        final fallbackData = await _supabase
+            .from('profiles')
+            .select('*')
+            .inFilter('id', allUserIds) as List<dynamic>;
+
+        for (final json in fallbackData) {
+          final prof = UserProfile.fromJson(json as Map<String, dynamic>);
+          profileMap[prof.id] = prof;
+        }
+      } catch (e) {
+        debugPrint('_populateMissingProfiles fallback error: $e');
+      }
+    }
 
     return requests.map((r) {
       UserProfile? pass = r.passenger;

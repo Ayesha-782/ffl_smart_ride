@@ -18,19 +18,32 @@ class AuthPrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: double.infinity,
       height: 50,
+      decoration: BoxDecoration(
+        gradient: isLoading ? null : AppColors.primaryGradient,
+        color: isLoading ? AppColors.primary.withValues(alpha: 0.6) : null,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          if (!isLoading)
+            BoxShadow(
+              color: AppColors.primary.withValues(alpha: 0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+        ],
+      ),
       child: ElevatedButton(
         onPressed: isLoading ? null : onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
+          backgroundColor: Colors.transparent,
           foregroundColor: Colors.white,
-          disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.6),
+          shadowColor: Colors.transparent,
+          disabledBackgroundColor: Colors.transparent,
           disabledForegroundColor: Colors.white,
-          elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 20),
         ),
@@ -54,8 +67,8 @@ class AuthPrimaryButton extends StatelessWidget {
                     text,
                     style: const TextStyle(
                       fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.2,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ],

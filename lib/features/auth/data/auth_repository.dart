@@ -15,34 +15,27 @@ class AuthRepository {
   /// Fetch user profile by user ID
   Future<UserProfile?> getUserProfile(String userId) async {
     try {
-      final data = await _supabase
-          .from('profiles')
-          .select('''
-            *,
-            vehicles (
-              id,
-              vehicle_type,
-              make,
-              model,
-              license_plate,
-              capacity
-            )
-          ''')
-          .eq('id', userId)
-          .maybeSingle();
-
-      if (data != null) {
-        return UserProfile.fromJson(data);
-      }
-
-      final fallbackData = await _supabase
+      final profileRes = await _supabase
           .from('profiles')
           .select('*')
           .eq('id', userId)
           .maybeSingle();
 
-      if (fallbackData != null) {
-        return UserProfile.fromJson(fallbackData);
+      if (profileRes != null) {
+        final data = Map<String, dynamic>.from(profileRes);
+        if (data['has_vehicle'] == true) {
+          try {
+            final vehicleRes = await _supabase
+                .from('vehicles')
+                .select('*')
+                .eq('user_id', userId)
+                .maybeSingle();
+            if (vehicleRes != null) {
+              data['vehicles'] = [vehicleRes];
+            }
+          } catch (_) {}
+        }
+        return UserProfile.fromJson(data);
       }
     } catch (_) {}
     return null;

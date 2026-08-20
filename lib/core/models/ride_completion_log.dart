@@ -7,6 +7,7 @@ class RideCompletionLog {
   final double distanceKm;
   final double emissionFactorKgPerKm;
   final double kgCo2Saved;
+  final double litersFuelSaved;
   final DateTime completedAt;
 
   const RideCompletionLog({
@@ -18,6 +19,7 @@ class RideCompletionLog {
     required this.distanceKm,
     required this.emissionFactorKgPerKm,
     required this.kgCo2Saved,
+    this.litersFuelSaved = 0.0,
     required this.completedAt,
   });
 
@@ -32,17 +34,26 @@ class RideCompletionLog {
       }
     }
 
+    final pCount = (json['passenger_count'] as num?)?.toInt() ??
+        (passengers.isNotEmpty ? passengers.length : 1);
+    final dist = (json['distance_km'] as num?)?.toDouble() ?? 2.5;
+    final fuelVal = (json['liters_fuel_saved'] as num?)?.toDouble();
+
     return RideCompletionLog(
       id: json['id'] as String? ?? '',
       sessionId: json['session_id'] as String?,
       driverId: json['driver_id'] as String? ?? '',
       passengerIds: passengers,
-      passengerCount: (json['passenger_count'] as num?)?.toInt() ??
-          (passengers.isNotEmpty ? passengers.length : 1),
-      distanceKm: (json['distance_km'] as num?)?.toDouble() ?? 2.5,
+      passengerCount: pCount,
+      distanceKm: dist,
       emissionFactorKgPerKm:
           (json['emission_factor_kg_per_km'] as num?)?.toDouble() ?? 0.12,
       kgCo2Saved: (json['kg_co2_saved'] as num?)?.toDouble() ?? 0.0,
+      litersFuelSaved: fuelVal ?? calculateFuelSaved(
+        routeDistanceKm: dist,
+        fuelConsumptionLPerKm: 0.08,
+        passengerCount: pCount,
+      ),
       completedAt: json['completed_at'] != null
           ? (DateTime.tryParse(json['completed_at'].toString()) ?? DateTime.now())
           : DateTime.now(),
@@ -59,6 +70,7 @@ class RideCompletionLog {
       'distance_km': distanceKm,
       'emission_factor_kg_per_km': emissionFactorKgPerKm,
       'kg_co2_saved': kgCo2Saved,
+      'liters_fuel_saved': litersFuelSaved,
       'completed_at': completedAt.toUtc().toIso8601String(),
     };
   }
@@ -70,5 +82,14 @@ class RideCompletionLog {
     required int passengerCount,
   }) {
     return routeDistanceKm * emissionFactorKgPerKm * passengerCount;
+  }
+
+  /// Calculates the fuel saved (in liters) for a completed carpool trip
+  static double calculateFuelSaved({
+    required double routeDistanceKm,
+    required double fuelConsumptionLPerKm,
+    required int passengerCount,
+  }) {
+    return routeDistanceKm * fuelConsumptionLPerKm * passengerCount;
   }
 }

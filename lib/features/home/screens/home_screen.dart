@@ -11,7 +11,7 @@ import '../../../core/widgets/profile_card.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../reports/data/reports_repository.dart';
 import '../../reports/models/reports_models.dart';
-import '../../reports/screens/reports_screen.dart';
+import '../../reports/screens/reports_shell.dart';
 import '../../rides/data/ride_repository.dart';
 import '../../rides/screens/available_requests_screen.dart';
 import '../../rides/screens/create_request_screen.dart';
@@ -134,13 +134,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadAllData() async {
-    await Future.wait([
-      _loadProfile(),
-      _loadActiveSession(),
-      _loadUnreadNotifications(),
-      _loadActiveRideOffer(),
-      _loadImpactSummary(),
-    ]);
+    try {
+      await Future.wait([
+        _loadProfile(),
+        _loadActiveSession(),
+        _loadUnreadNotifications(),
+        _loadActiveRideOffer(),
+        _loadImpactSummary(),
+      ]);
+    } catch (_) {}
+    if (mounted) {
+      setState(() => _loading = false);
+    }
   }
 
   String _getEmployeeFullName() {
@@ -659,7 +664,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openReportsScreen() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => const ReportsScreen(),
+        builder: (context) => const ReportsShell(),
       ),
     );
     if (mounted) {
@@ -1078,27 +1083,45 @@ class _ActionCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: backgroundColor,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: backgroundColor == AppColors.primaryLight
+                  ? AppColors.primary.withValues(alpha: 0.3)
+                  : AppColors.border,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Row(
             children: [
               Container(
-                height: 48,
-                width: 48,
+                height: 50,
+                width: 50,
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
-                child: Icon(icon, color: AppColors.primary),
+                child: Icon(icon, color: AppColors.primary, size: 24),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1109,6 +1132,7 @@ class _ActionCard extends StatelessWidget {
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: AppColors.textPrimary,
+                        letterSpacing: -0.2,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1117,15 +1141,24 @@ class _ActionCard extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecondary,
+                        height: 1.3,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: AppColors.primary,
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 14,
+                  color: AppColors.primaryDark,
+                ),
               ),
             ],
           ),
@@ -1150,14 +1183,22 @@ class _ImpactItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Icon(icon, color: AppColors.primary, size: 24),
-        const SizedBox(height: 6),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppColors.primaryLight,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: AppColors.primaryDark, size: 20),
+        ),
+        const SizedBox(height: 8),
         Text(
           value,
           style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
             color: AppColors.textPrimary,
+            letterSpacing: -0.5,
           ),
         ),
         const SizedBox(height: 2),
@@ -1166,6 +1207,7 @@ class _ImpactItem extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(
             fontSize: 11,
+            fontWeight: FontWeight.w500,
             color: AppColors.textSecondary,
           ),
         ),

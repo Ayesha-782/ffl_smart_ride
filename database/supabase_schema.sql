@@ -431,11 +431,67 @@ DROP POLICY IF EXISTS "Passengers or accepted drivers can update ride requests" 
 DROP POLICY IF EXISTS "Passengers can delete their own ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Authenticated users can update ride requests" ON public.ride_requests;
 
-CREATE POLICY "allow_all_authenticated_ride_requests"
-    ON public.ride_requests FOR ALL
+-- F2: the previous policy on this table was
+--
+--     CREATE POLICY "allow_all_authenticated_ride_requests"
+--         ON public.ride_requests FOR ALL
+--         TO authenticated USING (true) WITH CHECK (true);
+--
+-- which let any authenticated user read, modify or delete any *other* user's
+-- ride request straight through the REST API, with the app's logic bypassed
+-- entirely. Replaced below with per-command policies matching the scoping
+-- already used for driver_availability and passenger_log.
+--
+-- Driver-side transitions (accept / confirm / complete / cancel-offer) are
+-- deliberately NOT granted here: they run through SECURITY DEFINER RPCs, which
+-- are not subject to RLS. Granting drivers a direct UPDATE would re-open the
+-- hole those RPCs exist to close.
+DROP POLICY IF EXISTS "Authenticated users can view ride requests" ON public.ride_requests;
+DROP POLICY IF EXISTS "Passengers can insert own ride requests" ON public.ride_requests;
+DROP POLICY IF EXISTS "Passengers can update own ride requests" ON public.ride_requests;
+DROP POLICY IF EXISTS "Passengers can delete own settled ride requests" ON public.ride_requests;
+
+-- SELECT stays open to all authenticated users: drivers must be able to browse
+-- the open request queue. This breadth is intentional, not an oversight.
+CREATE POLICY "Authenticated users can view ride requests"
+    ON public.ride_requests FOR SELECT
     TO authenticated
-    USING (true)
-    WITH CHECK (true);
+    USING (true);
+
+-- INSERT: a passenger may only create requests in their own name.
+CREATE POLICY "Passengers can insert own ride requests"
+    ON public.ride_requests FOR INSERT
+    TO authenticated
+    WITH CHECK (auth.uid() = passenger_id);
+
+-- UPDATE: passenger-initiated changes to their own request only (edit, cancel,
+-- decline an offer). WITH CHECK repeats the predicate so a passenger cannot
+-- hand their row to someone else by rewriting passenger_id.
+CREATE POLICY "Passengers can update own ride requests"
+    ON public.ride_requests FOR UPDATE
+    TO authenticated
+    USING (auth.uid() = passenger_id)
+    WITH CHECK (auth.uid() = passenger_id);
+
+-- DELETE: own rows, and only once the request can no longer be acted on. An
+-- 'accepted' or 'confirmed' request must be cancelled rather than deleted out
+-- from under the driver who was offered it.
+--
+-- The third arm covers a request that is still 'pending' but whose departure
+-- time has passed. The UI offers "Delete Expired Request" for exactly that case
+-- (available_requests_screen.dart:920), and such a row has no driver attached,
+-- so removing it harms nobody. Restricting DELETE to cancelled/completed alone
+-- would leave that button silently deleting nothing.
+CREATE POLICY "Passengers can delete own settled ride requests"
+    ON public.ride_requests FOR DELETE
+    TO authenticated
+    USING (
+        auth.uid() = passenger_id
+        AND (
+            status IN ('cancelled', 'completed')
+            OR (status = 'pending' AND leaving_time < timezone('utc'::text, now()))
+        )
+    );
 
 -- ==============================================================================
 -- 13A. RPC: ATOMIC ACCEPT RIDE REQUEST (Prevents Deadlocks & Sets 5-Min Deadline)

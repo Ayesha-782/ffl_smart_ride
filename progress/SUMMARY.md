@@ -7,8 +7,8 @@ Baseline commit: `4193035`.
 
 | # | Fix | Status | Commit | Pushed to GitHub |
 |---|-----|--------|--------|-------------------|
-| F1 | Double-booking race condition | DONE | `fix: close ad-hoc...race` (hash recorded at F2) | YES |
-| F2 | RLS policy hole on ride_requests | NOT STARTED | — | — |
+| F1 | Double-booking race condition | DONE | `aa6dfb4` | YES |
+| F2 | RLS policy hole on ride_requests | DONE | (this commit) | YES |
 | F3 | Server-side expiry scheduling | NOT STARTED | — | — |
 | F4 | Defense-in-depth constraints | NOT STARTED | — | — |
 | F5 | Idempotency on ride-request creation | NOT STARTED | — | — |
@@ -26,13 +26,20 @@ Established before any code changed, so regressions can be told from pre-existin
 |-------|---------|-------|
 | baseline | 70 issues, 0 errors | 74/74 |
 | F1 | 70 issues, 0 errors | 88/88 (+14 new) |
+| F2 | 70 issues, 0 errors | 96/96 (+8 new) |
 
 ## Carried-forward notes
 
-- **The schema edits are not deployed.** F1 moved the "must be confirmed" guard from Dart into
-  `complete_ride_request`. Until someone with Supabase dashboard access applies
-  `database/supabase_schema.sql`, that guard is enforced in neither place. This is the highest
-  priority item for whoever has database credentials.
+- **The schema edits are not deployed, and this is now urgent.** F1 moved the "must be
+  confirmed" guard from Dart into `complete_ride_request`, so until the schema is applied that
+  guard is enforced in neither place. F2 closes an RLS hole that lets any authenticated user
+  modify any other user's ride request — **that hole is open in production until someone with
+  Supabase dashboard access applies `database/supabase_schema.sql`.** Highest priority item for
+  whoever holds database credentials.
+- **Client-side expiry sweeps narrow under F2 and their replacement does not land until F3.**
+  See `02_ride_requests_rls.md`. Related pre-existing bug found there:
+  `autoExpirePastRequests()` writes a status the CHECK constraint forbids, so it has never
+  worked; its failure is swallowed by an empty `catch`. F3 must not assume it works.
 - No live database access from this session, so all SQL work is verified by reading only. Every
   fix touching SQL will carry the same caveat.
 - A true concurrent two-driver accept test still needs an integration environment — see

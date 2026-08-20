@@ -5,7 +5,7 @@
 -- Every schema / RPC / policy change made by the Claude Code fix pass, in the
 -- order they must be applied, as one runnable script.
 --
--- Covers: F1, F2, F3, F4.   Last updated: 2026-08-21
+-- Covers: F1, F2, F3, F4, F5.   Last updated: 2026-08-21
 --
 -- WHY THIS FILE EXISTS
 --   None of these changes have been applied to any live database. They were
@@ -400,6 +400,34 @@ CREATE TRIGGER trg_driver_availability_seats
 
 
 -- =============================================================================
+-- F5 — Idempotency on ride-request creation
+-- =============================================================================
+-- createRideRequest() had no idempotency key, so a retried insert on a flaky
+-- connection produced two identical open requests, each of which a different
+-- driver could then accept.
+--
+-- The client supplies a UUID it generates per logical request. A retry carrying
+-- the same key collides with the index below, and the client treats the
+-- collision as "already created" and returns the existing row.
+--
+-- Nullable and unique only when present: rows created before this column
+-- existed, and any client too old to send a key, must still be insertable.
+-- Safe on existing data — adding a nullable column cannot fail on rows already
+-- present, and the partial index ignores them.
+ALTER TABLE public.ride_requests
+    ADD COLUMN IF NOT EXISTS client_request_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ride_requests_client_request_id
+    ON public.ride_requests (client_request_id)
+    WHERE client_request_id IS NOT NULL;
+
+-- ORDERING NOTE: this must be applied before (or with) the app build that sends
+-- client_request_id. The Flutter client degrades safely if it is not — the
+-- insert fails on the unknown column and falls back to a payload without the
+-- key, so requests are still created, just without idempotency protection.
+
+
+-- =============================================================================
 -- POST-CONDITIONS — run these after applying, and actually read the output
 -- =============================================================================
 -- A clean run is not proof the fixes are in force; the pg_cron block above
@@ -446,4 +474,19 @@ CREATE TRIGGER trg_driver_availability_seats
 --      -- expect: SUCCESS (no vehicle registered = not blocked)
 --      INSERT INTO public.driver_availability (session_id, driver_id, seats_offered, seats_remaining)
 --      VALUES ('<session>', '<driver with NO vehicle row>', 99, 99);
+--
+-- 9. The F5 column and index exist:
+--      SELECT column_name FROM information_schema.columns
+--      WHERE table_name = 'ride_requests' AND column_name = 'client_request_id';
+--      SELECT indexname FROM pg_indexes
+--      WHERE tablename = 'ride_requests' AND indexname = 'uq_ride_requests_client_request_id';
+--
+-- 10. Smoke-test idempotency — the second insert should be REJECTED, and
+--     multiple NULL keys should still be accepted:
+--      INSERT INTO public.ride_requests (passenger_id, pickup_location, office_location,
+--             leaving_time, status, client_request_id)
+--      VALUES ('<passenger>', 'A', 'B', now() + interval '1 hour', 'pending',
+--              '11111111-1111-4111-8111-111111111111');
+--      -- expect: duplicate key value violates unique constraint
+--      (run the identical statement a second time)
 -- =============================================================================

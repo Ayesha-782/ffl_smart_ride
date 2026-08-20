@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/models/app_notification.dart';
@@ -11,6 +13,24 @@ import '../../../core/models/ride_slot.dart';
 import '../../../core/models/session_schedule.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/services/supabase_service.dart';
+
+final Random _idRandom = Random.secure();
+
+/// Generates a RFC 4122 version 4 UUID.
+///
+/// Written out rather than pulling in the `uuid` package: this is the only
+/// place the project needs one, and adding a dependency for it is not worth it.
+String generateClientRequestId() {
+  final bytes = List<int>.generate(16, (_) => _idRandom.nextInt(256));
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}
 
 enum UserSessionResponseType { none, driver, passenger, matched }
 
@@ -485,6 +505,33 @@ class RideRepository {
     } catch (_) {}
   }
 
+  /// Whether [error] is a unique violation on the idempotency key specifically.
+  ///
+  /// Matched on the index name as well as the SQLSTATE, so that a unique
+  /// violation on some *other* constraint is not mistaken for a duplicate
+  /// submission and quietly swallowed.
+  bool _isDuplicateClientRequestId(Object error) {
+    if (error is PostgrestException) {
+      if (error.code != '23505') return false;
+      final detail = '${error.message} ${error.details ?? ''}'.toLowerCase();
+      return detail.contains('client_request_id');
+    }
+    return false;
+  }
+
+  /// Creates an ad-hoc ride request.
+  ///
+  /// [clientRequestId] is an idempotency key. A retry carrying the same key
+  /// collides with `uq_ride_requests_client_request_id` and the existing row is
+  /// returned instead of a second request being created.
+  ///
+  /// **Pass a stable key to actually get idempotency.** When omitted, a fresh
+  /// key is generated per call, which protects against a retry *inside* this
+  /// method but not against the caller invoking it twice — a double-tapped
+  /// button sends two different keys and still creates two requests. Callers
+  /// that want that covered should generate one key with
+  /// [generateClientRequestId] when the compose screen opens and pass the same
+  /// value on every attempt.
   Future<RideRequest> createRideRequest({
     required String pickupLocation,
     required String officeLocation,
@@ -495,6 +542,7 @@ class RideRepository {
     double? pickupLongitude,
     double? officeLatitude,
     double? officeLongitude,
+    String? clientRequestId,
   }) async {
     final user = _supabase.auth.currentUser;
     if (user == null) {
@@ -506,6 +554,8 @@ class RideRepository {
         'Ride requests can only be scheduled within official operating slots:\n${RideSlot.formattedSlotsSummary}',
       );
     }
+
+    final requestKey = clientRequestId ?? generateClientRequestId();
 
     final payload = <String, dynamic>{
       'passenger_id': user.id,
@@ -520,6 +570,7 @@ class RideRepository {
       if (pickupLongitude != null) 'pickup_longitude': pickupLongitude,
       if (officeLatitude != null) 'office_latitude': officeLatitude,
       if (officeLongitude != null) 'office_longitude': officeLongitude,
+      'client_request_id': requestKey,
     };
 
     try {
@@ -532,6 +583,21 @@ class RideRepository {
       return RideRequest.fromJson(data);
     } catch (e) {
       final errStr = e.toString().toLowerCase();
+
+      // The key already landed: this is a retry of a request that in fact
+      // succeeded, so return what was created rather than creating a second one.
+      if (_isDuplicateClientRequestId(e)) {
+        final existing = await _supabase
+            .from('ride_requests')
+            .select()
+            .eq('client_request_id', requestKey)
+            .maybeSingle();
+
+        if (existing != null) {
+          return RideRequest.fromJson(existing);
+        }
+        rethrow;
+      }
       // If pickup_stop_order or coordinate columns don't exist yet on remote schema, fallback to base columns
       if (errStr.contains('pickup_stop_order') ||
           errStr.contains('schema cache') ||

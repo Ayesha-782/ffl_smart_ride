@@ -2108,3 +2108,24 @@ CREATE TRIGGER trg_driver_availability_seats
     BEFORE INSERT OR UPDATE OF seats_offered ON public.driver_availability
     FOR EACH ROW
     EXECUTE FUNCTION public.trg_validate_seats_offered();
+
+-- ==============================================================================
+-- 21. IDEMPOTENT RIDE-REQUEST CREATION (F5)
+-- ==============================================================================
+-- createRideRequest() had no idempotency key, so a retried insert on a flaky
+-- connection -- or a passenger double-tapping "Create Request" -- produced two
+-- identical open requests, each of which a different driver could then accept.
+--
+-- The client supplies a UUID it generates once per logical request. A retry
+-- carrying the same key collides with this index instead of inserting again,
+-- and the client treats the collision as "already created" and returns the
+-- existing row.
+--
+-- Nullable, and unique only when present: rows created before this column
+-- existed, and any client too old to send a key, must still be insertable.
+ALTER TABLE public.ride_requests
+    ADD COLUMN IF NOT EXISTS client_request_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ride_requests_client_request_id
+    ON public.ride_requests (client_request_id)
+    WHERE client_request_id IS NOT NULL;

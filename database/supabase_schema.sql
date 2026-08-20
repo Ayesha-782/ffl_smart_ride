@@ -2048,3 +2048,63 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.vehicles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.ride_requests;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.ride_completion_log;
 
+
+-- ==============================================================================
+-- 20. DEFENSE-IN-DEPTH CONSTRAINTS (F4)
+-- ==============================================================================
+-- Backstops that hold even when the application logic above is wrong. These
+-- duplicate rules already enforced in assign_passengers() and in the Flutter
+-- client on purpose: the point is that they survive a bug in either.
+
+-- F4.1 -- One active match per passenger per session.
+--
+-- assign_passengers() is supposed to guarantee this, but nothing outside that
+-- function enforces it: a second code path, a retry, or a direct API call could
+-- leave a passenger matched to two drivers in the same session. Partial, so
+-- cancelled and completed history is unaffected -- a passenger can legitimately
+-- have many non-active rows for one session.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_match_per_passenger
+    ON public.ride_matches (session_id, passenger_id)
+    WHERE status = 'active';
+
+-- F4.2 -- A driver cannot offer more seats than their vehicle holds.
+--
+-- driver_availability.seats_offered is validated only in the UI. A stale client
+-- or a direct API call can offer more seats than exist, which then over-fills
+-- the priority queue and strands passengers who were told they had a seat.
+--
+-- Deliberately enforced only when a vehicle row exists. Accounts without a
+-- registered vehicle -- the README's test admin account among them -- must not
+-- be blocked from creating availability, so a missing vehicle is a pass, not a
+-- failure. This is a trigger rather than a CHECK constraint because the limit
+-- lives in another table and CHECK cannot reference one.
+CREATE OR REPLACE FUNCTION public.trg_validate_seats_offered()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_capacity SMALLINT;
+BEGIN
+    SELECT capacity INTO v_capacity
+    FROM public.vehicles
+    WHERE user_id = NEW.driver_id;
+
+    -- No vehicle registered: nothing to validate against.
+    IF NOT FOUND OR v_capacity IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.seats_offered > v_capacity THEN
+        RAISE EXCEPTION
+            'Cannot offer % seats: your registered vehicle holds % (driver %)',
+            NEW.seats_offered, v_capacity, NEW.driver_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_driver_availability_seats ON public.driver_availability;
+CREATE TRIGGER trg_driver_availability_seats
+    BEFORE INSERT OR UPDATE OF seats_offered ON public.driver_availability
+    FOR EACH ROW
+    EXECUTE FUNCTION public.trg_validate_seats_offered();

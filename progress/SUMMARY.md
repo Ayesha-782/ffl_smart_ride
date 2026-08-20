@@ -9,8 +9,8 @@ Baseline commit: `4193035`.
 |---|-----|--------|--------|-------------------|
 | F1 | Double-booking race condition | DONE | `aa6dfb4` | YES |
 | F2 | RLS policy hole on ride_requests | DONE | `336c09c` | YES |
-| F3 | Server-side expiry scheduling | **NEEDS_DECISION** (migration written; needs pg_cron enabled) | (this commit) | YES |
-| F4 | Defense-in-depth constraints | NOT STARTED | — | — |
+| F3 | Server-side expiry scheduling | **NEEDS_DECISION** (migration written; needs pg_cron enabled) | `4f65de2` | YES |
+| F4 | Defense-in-depth constraints | DONE | (this commit) | YES |
 | F5 | Idempotency on ride-request creation | NOT STARTED | — | — |
 | F6 | Broader hardening | BLOCKED BY PLAN — needs explicit go-ahead | — | — |
 
@@ -28,6 +28,7 @@ Established before any code changed, so regressions can be told from pre-existin
 | F1 | 70 issues, 0 errors | 88/88 (+14 new) |
 | F2 | 70 issues, 0 errors | 96/96 (+8 new) |
 | F3 | 70 issues, 0 errors | 108/108 (+12 new) |
+| F4 | 70 issues, 0 errors | 117/117 (+9 new) |
 
 ## Open decisions
 
@@ -62,3 +63,10 @@ the database.
   fix touching SQL will carry the same caveat.
 - A true concurrent two-driver accept test still needs an integration environment — see
   `01_double_booking_race.md`.
+- **F4 adds the one statement that can fail on real data.** `CREATE UNIQUE INDEX` aborts if a
+  passenger already holds two active matches in one session. Run the pre-check in
+  `DEPLOY_PENDING.sql` section F4 before applying. Remediation is provided but deliberately
+  left commented out — it picks a winner between two matches, which is a judgement call.
+- **No constraint in F4 has had its rejection behaviour tested.** The plan asks for deliberate
+  violation tests; those need a live database and are written out as post-conditions 7-8 in
+  `DEPLOY_PENDING.sql`.

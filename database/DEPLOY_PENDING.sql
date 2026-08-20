@@ -5,7 +5,7 @@
 -- Every schema / RPC / policy change made by the Claude Code fix pass, in the
 -- order they must be applied, as one runnable script.
 --
--- Covers: F1, F2, F3.   Last updated: 2026-08-21
+-- Covers: F1, F2, F3, F4.   Last updated: 2026-08-21
 --
 -- WHY THIS FILE EXISTS
 --   None of these changes have been applied to any live database. They were
@@ -29,6 +29,10 @@
 --     as behaviour change in anything relying on the old permissiveness.
 --   * F3 widens the status CHECK constraint. Rows may now legitimately hold
 --     status 'expired', which previously could never be written.
+--   * F4 adds a unique index that WILL FAIL TO APPLY if the data already
+--     contains a passenger with two active matches in one session. Run the
+--     pre-check in section F4 first — this is the only statement here that can
+--     fail on real data rather than on a mistake.
 --
 -- VERIFICATION STATUS — read this honestly:
 --   None of this SQL has been executed anywhere. It has been reviewed by
@@ -308,6 +312,94 @@ $do$;
 
 
 -- =============================================================================
+-- F4 — Defense-in-depth constraints
+-- =============================================================================
+-- Backstops that hold even when the application logic is wrong. They duplicate
+-- rules already enforced in assign_passengers() and the Flutter client on
+-- purpose: the point is that they survive a bug in either.
+
+-- -----------------------------------------------------------------------------
+-- PRE-CHECK — run this BEFORE the index below, and act on the result
+-- -----------------------------------------------------------------------------
+-- CREATE UNIQUE INDEX fails outright if existing rows already violate it. This
+-- is the one statement in this script that can fail on real data rather than on
+-- a mistake, and it is not idempotent-safe in the way the rest is: a failure
+-- here aborts the transaction if you wrapped the script in BEGIN/COMMIT.
+--
+-- Find any passenger already holding two active matches in one session:
+--
+--     SELECT session_id, passenger_id, count(*)
+--     FROM public.ride_matches
+--     WHERE status = 'active'
+--     GROUP BY session_id, passenger_id
+--     HAVING count(*) > 1;
+--
+-- If that returns rows, the data is already inconsistent and must be resolved
+-- before the index can be created — that is a judgement call about which match
+-- is the real one, so it is deliberately not automated here. Keeping the
+-- earliest active match per (session, passenger) would look like:
+--
+--     UPDATE public.ride_matches m SET status = 'cancelled',
+--            cancelled_at = timezone('utc'::text, now())
+--     WHERE m.status = 'active' AND m.id NOT IN (
+--         SELECT DISTINCT ON (session_id, passenger_id) id
+--         FROM public.ride_matches WHERE status = 'active'
+--         ORDER BY session_id, passenger_id, matched_at ASC);
+--
+-- Review that against the real rows before running it: it silently picks a
+-- winner, and the losing driver may already have collected the passenger.
+
+-- F4.1 — One active match per passenger per session. Partial, so cancelled and
+-- completed history is unaffected.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_match_per_passenger
+    ON public.ride_matches (session_id, passenger_id)
+    WHERE status = 'active';
+
+-- F4.2 — A driver cannot offer more seats than their vehicle holds.
+-- Enforced only when a vehicle row exists: accounts without a registered
+-- vehicle (the README's test admin account) must not be blocked. A trigger
+-- rather than a CHECK because the limit lives in another table.
+CREATE OR REPLACE FUNCTION public.trg_validate_seats_offered()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_capacity SMALLINT;
+BEGIN
+    SELECT capacity INTO v_capacity
+    FROM public.vehicles
+    WHERE user_id = NEW.driver_id;
+
+    IF NOT FOUND OR v_capacity IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.seats_offered > v_capacity THEN
+        RAISE EXCEPTION
+            'Cannot offer % seats: your registered vehicle holds % (driver %)',
+            NEW.seats_offered, v_capacity, NEW.driver_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_driver_availability_seats ON public.driver_availability;
+CREATE TRIGGER trg_driver_availability_seats
+    BEFORE INSERT OR UPDATE OF seats_offered ON public.driver_availability
+    FOR EACH ROW
+    EXECUTE FUNCTION public.trg_validate_seats_offered();
+
+-- NOTE: existing driver_availability rows are NOT retroactively validated. The
+-- trigger fires on INSERT and on UPDATE OF seats_offered only, so a row already
+-- over capacity stays until it is next written. To find them:
+--
+--     SELECT da.id, da.driver_id, da.seats_offered, v.capacity
+--     FROM public.driver_availability da
+--     JOIN public.vehicles v ON v.user_id = da.driver_id
+--     WHERE da.status = 'active' AND da.seats_offered > v.capacity;
+
+
+-- =============================================================================
 -- POST-CONDITIONS — run these after applying, and actually read the output
 -- =============================================================================
 -- A clean run is not proof the fixes are in force; the pg_cron block above
@@ -336,4 +428,22 @@ $do$;
 --
 -- 6. Smoke-test the F2 hole is closed — as user A, attempt to update user B's
 --    request through the REST API. It should affect zero rows.
+--
+-- 7. The F4 index and trigger exist:
+--      SELECT indexname FROM pg_indexes
+--      WHERE tablename = 'ride_matches' AND indexname = 'uq_active_match_per_passenger';
+--      SELECT tgname, tgenabled FROM pg_trigger
+--      WHERE tgname = 'trg_driver_availability_seats';
+--
+-- 8. Smoke-test both F4 constraints by deliberately violating them — each
+--    should be rejected:
+--      -- expect: duplicate key value violates unique constraint
+--      INSERT INTO public.ride_matches (session_id, passenger_id, driver_id, status)
+--      VALUES ('<session>', '<passenger already actively matched>', '<other driver>', 'active');
+--      -- expect: Cannot offer N seats: your registered vehicle holds M
+--      INSERT INTO public.driver_availability (session_id, driver_id, seats_offered, seats_remaining)
+--      VALUES ('<session>', '<driver with a vehicle>', 99, 99);
+--      -- expect: SUCCESS (no vehicle registered = not blocked)
+--      INSERT INTO public.driver_availability (session_id, driver_id, seats_offered, seats_remaining)
+--      VALUES ('<session>', '<driver with NO vehicle row>', 99, 99);
 -- =============================================================================

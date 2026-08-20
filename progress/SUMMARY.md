@@ -8,8 +8,8 @@ Baseline commit: `4193035`.
 | # | Fix | Status | Commit | Pushed to GitHub |
 |---|-----|--------|--------|-------------------|
 | F1 | Double-booking race condition | DONE | `aa6dfb4` | YES |
-| F2 | RLS policy hole on ride_requests | DONE | (this commit) | YES |
-| F3 | Server-side expiry scheduling | NOT STARTED | — | — |
+| F2 | RLS policy hole on ride_requests | DONE | `336c09c` | YES |
+| F3 | Server-side expiry scheduling | **NEEDS_DECISION** (migration written; needs pg_cron enabled) | (this commit) | YES |
 | F4 | Defense-in-depth constraints | NOT STARTED | — | — |
 | F5 | Idempotency on ride-request creation | NOT STARTED | — | — |
 | F6 | Broader hardening | BLOCKED BY PLAN — needs explicit go-ahead | — | — |
@@ -27,6 +27,24 @@ Established before any code changed, so regressions can be told from pre-existin
 | baseline | 70 issues, 0 errors | 74/74 |
 | F1 | 70 issues, 0 errors | 88/88 (+14 new) |
 | F2 | 70 issues, 0 errors | 96/96 (+8 new) |
+| F3 | 70 issues, 0 errors | 108/108 (+12 new) |
+
+## Open decisions
+
+**F3 — NEEDS_DECISION.** The pg_cron migration is written but cannot be verified. Someone with
+Supabase access must (a) confirm pg_cron can be enabled on this plan tier and enable it, or
+(b) if it cannot, choose a fallback scheduler for an Edge Function (GitHub Actions / QStash /
+other) — an infrastructure and cost decision. **The scheduling block is deliberately non-fatal,
+so applying the script succeeds even when it schedules nothing.** Verify with
+`SELECT jobid, jobname, schedule, active FROM cron.job WHERE jobname = '''ride_request_expiry''';`
+— an empty result means F3 is not in force. Full steps in `03_server_side_expiry.md`.
+
+## Deployment
+
+**`database/DEPLOY_PENDING.sql` is the single script to run when Supabase access is available.**
+It consolidates every schema/RPC/policy change from F1 onward in apply order, guarded so it is
+safe to re-run, and ends with post-condition queries. It is updated after every fix that touches
+the database.
 
 ## Carried-forward notes
 

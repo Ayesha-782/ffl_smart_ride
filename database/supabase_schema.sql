@@ -418,10 +418,22 @@ ALTER TABLE public.ride_requests
     ADD COLUMN IF NOT EXISTS office_latitude DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS office_longitude DOUBLE PRECISION;
 
--- Update status check constraint to support 'confirmed'
+-- Update status check constraint to support 'confirmed' and 'expired'.
+--
+-- F3: 'expired' was missing here even though the application has always treated
+-- it as a real status (RideRequest.isExpired in lib/core/models/ride_request.dart
+-- tests status == 'expired', and available_requests_screen.dart renders an
+-- 'expired' status chip). The consequence was that every writer of that status
+-- failed the constraint:
+--   * expire_past_slot_ride_requests() raised on every call, so the RPC F3
+--     schedules has in fact never successfully expired anything;
+--   * RideRepository.autoExpirePastRequests() hit the same error, swallowed by
+--     an empty catch (_) {}, so it silently did nothing.
+-- Scheduling the RPC without widening this constraint would just produce a
+-- failing cron job every minute, forever.
 ALTER TABLE public.ride_requests DROP CONSTRAINT IF EXISTS ride_requests_status_check;
-ALTER TABLE public.ride_requests ADD CONSTRAINT ride_requests_status_check 
-    CHECK (status IN ('pending', 'accepted', 'confirmed', 'completed', 'cancelled'));
+ALTER TABLE public.ride_requests ADD CONSTRAINT ride_requests_status_check
+    CHECK (status IN ('pending', 'accepted', 'confirmed', 'completed', 'cancelled', 'expired'));
 
 -- Enable RLS on ride_requests
 DROP POLICY IF EXISTS "allow_all_authenticated_ride_requests" ON public.ride_requests;
@@ -681,6 +693,73 @@ BEGIN
     RETURN v_count;
 END;
 $$;
+
+-- ==============================================================================
+-- 13B4. SCHEDULED EXPIRY (F3)
+-- ==============================================================================
+-- Both expiry RPCs above existed but nothing ever called them on a schedule.
+-- Expiry happened only as a side effect of a user opening a screen that called
+-- getAvailableRequests(); if nobody opened it, an unconfirmed 'accepted' ride
+-- stayed stuck indefinitely, holding a request out of the open queue.
+--
+-- Single entry point so there is one cron job rather than two, and one place to
+-- add future sweeps.
+CREATE OR REPLACE FUNCTION public.run_ride_request_expiry()
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_unconfirmed INT;
+    v_past_slot INT;
+BEGIN
+    v_unconfirmed := public.expire_unconfirmed_ride_requests();
+    v_past_slot := public.expire_past_slot_ride_requests();
+
+    RETURN jsonb_build_object(
+        'unconfirmed_reverted', v_unconfirmed,
+        'past_slot_expired', v_past_slot,
+        'ran_at', timezone('utc'::text, now())
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.run_ride_request_expiry() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.run_ride_request_expiry() FROM authenticated;
+
+-- Scheduling. pg_cron is NOT enabled by default on Supabase and cannot be
+-- enabled from SQL alone on all plan tiers -- see database/DEPLOY_PENDING.sql
+-- and progress/03_server_side_expiry.md for the dashboard steps.
+--
+-- This block is deliberately conditional: if pg_cron is absent the script still
+-- applies cleanly and raises a NOTICE, rather than aborting the whole migration
+-- and taking the F1/F2 fixes down with it.
+DO $do$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+        -- cron.unschedule errors if the job is absent, so guard on the catalog.
+        IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'ride_request_expiry') THEN
+            PERFORM cron.unschedule('ride_request_expiry');
+        END IF;
+
+        -- Every minute. The plan asks for 30-60s; 60s is the shortest interval
+        -- standard five-field cron syntax expresses, and it is supported on
+        -- every pg_cron version. For 30s, pg_cron >= 1.5 accepts '30 seconds'
+        -- as the schedule instead -- switch only after confirming the version.
+        PERFORM cron.schedule(
+            'ride_request_expiry',
+            '* * * * *',
+            $job$SELECT public.run_ride_request_expiry();$job$
+        );
+
+        RAISE NOTICE 'pg_cron: scheduled job ride_request_expiry (every minute)';
+    ELSE
+        RAISE NOTICE 'pg_cron is NOT installed - ride_request_expiry was NOT scheduled. '
+                     'Enable it in the Supabase dashboard (Database -> Extensions -> pg_cron), '
+                     'then re-run this block. Until then expiry remains client-triggered only.';
+    END IF;
+END
+$do$;
 
 -- ==============================================================================
 -- 13C. RPC: COMPLETE RIDE (Driver marks ad-hoc ride completed & logs CO2)

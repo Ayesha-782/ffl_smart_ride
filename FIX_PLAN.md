@@ -18,7 +18,8 @@ Then proceed through F1 → F6 **in order**. Do not skip ahead, and do not combi
 - Run `flutter analyze` and `flutter test`. Fix any new errors/failures your change introduced before moving on. Pre-existing unrelated failures can be noted and left, but say so explicitly.
 - Write `progress/0<n>_<short-name>.md` (template below).
 - Make a single git commit for that fix only, with a clear message (e.g. `fix: close ad-hoc ride-request double-booking race condition`).
-- Update `progress/SUMMARY.md` (create it on your first fix, append to it after each subsequent one) — a running one-line status table so the user can see overall progress at a glance without opening every file.
+- **Immediately run `git push origin main` after every single commit. Do this after every fix, no exceptions, without being asked again.** Confirm the push succeeded (check the output for errors — auth failures, rejected pushes, etc.) before moving to the next fix. If a push fails for any reason, stop and report the exact error rather than continuing on to the next fix with unpushed work piling up.
+- Update `progress/SUMMARY.md` (create it on your first fix, append to it after each subsequent one) — a running one-line status table so the user can see overall progress at a glance without opening every file. Add a column noting whether each fix's commit was successfully pushed.
 
 ### Progress file template (`progress/0<n>_<name>.md`)
 ```markdown
@@ -46,10 +47,10 @@ Then proceed through F1 → F6 **in order**. Do not skip ahead, and do not combi
 # Fix Progress Summary
 Last updated: <date>
 
-| # | Fix | Status | Commit |
-|---|-----|--------|--------|
-| F1 | Double-booking race condition | DONE | abc1234 |
-| F2 | RLS policy hole on ride_requests | ... | ... |
+| # | Fix | Status | Commit | Pushed to GitHub |
+|---|-----|--------|--------|-------------------|
+| F1 | Double-booking race condition | DONE | abc1234 | YES |
+| F2 | RLS policy hole on ride_requests | ... | ... | ... |
 ```
 
 ---

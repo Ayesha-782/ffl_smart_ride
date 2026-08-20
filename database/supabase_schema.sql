@@ -638,16 +638,28 @@ DECLARE
     v_user_id UUID := auth.uid();
     v_passenger_id UUID;
     v_driver_id UUID;
+    v_status TEXT;
     v_dist NUMERIC;
     v_emiss NUMERIC;
     v_co2 NUMERIC;
 BEGIN
-    SELECT passenger_id, driver_id INTO v_passenger_id, v_driver_id
+    -- Lock the row so a concurrent complete/cancel cannot interleave with the
+    -- status guard below.
+    SELECT passenger_id, driver_id, status INTO v_passenger_id, v_driver_id, v_status
     FROM public.ride_requests
-    WHERE id = p_ride_id AND (driver_id = v_user_id OR passenger_id = v_user_id);
+    WHERE id = p_ride_id AND (driver_id = v_user_id OR passenger_id = v_user_id)
+    FOR UPDATE;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Ride request not found or unauthorized';
+    END IF;
+
+    -- A ride may only be completed once the passenger has confirmed it. This
+    -- guard previously existed only in the Flutter client, which meant a direct
+    -- API call could complete an unconfirmed ride and log CO2 savings for a trip
+    -- that was never agreed to.
+    IF v_status <> 'confirmed' THEN
+        RAISE EXCEPTION 'Cannot complete ride: passenger has not confirmed the ride offer yet (current status: %)', v_status;
     END IF;
 
     UPDATE public.ride_requests
@@ -771,17 +783,23 @@ DECLARE
     v_passenger_id UUID;
     v_driver_name TEXT;
 BEGIN
+    -- Lock the row so this cannot interleave with a concurrent confirm.
     SELECT passenger_id INTO v_passenger_id
     FROM public.ride_requests
-    WHERE id = p_ride_id AND driver_id = v_driver_id;
+    WHERE id = p_ride_id AND driver_id = v_driver_id
+    FOR UPDATE;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Ride request not found or you are not the assigned driver';
     END IF;
 
+    -- confirmation_deadline must be cleared alongside the driver: leaving the
+    -- previous driver's deadline on a row that is back to 'pending' leaves stale
+    -- expiry state attached to an offer that no longer exists.
     UPDATE public.ride_requests
     SET driver_id = NULL,
         status = 'pending',
+        confirmation_deadline = NULL,
         updated_at = timezone('utc'::text, now())
     WHERE id = p_ride_id;
 

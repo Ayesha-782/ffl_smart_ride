@@ -793,7 +793,20 @@ class RideRepository {
         .eq('passenger_id', user.id);
   }
 
-  /// Accepts a ride request with a 5-minute confirmation deadline
+  /// Accepts a ride request with a 5-minute confirmation deadline.
+  ///
+  /// Delegates entirely to the `accept_ride_request` RPC, which locks the row
+  /// with `SELECT ... FOR UPDATE` so that two drivers accepting the same
+  /// request are serialised, and raises if the request is no longer pending.
+  ///
+  /// There is deliberately no client-side fallback. A read-then-write from the
+  /// client cannot be made race-free, and the previous implementation never
+  /// checked whether its own UPDATE matched a row — so the losing driver of a
+  /// race saw a silent success. If the RPC fails, the error surfaces to the
+  /// caller rather than degrading to an unsafe path.
+  ///
+  /// The RPC inserts the passenger notification itself; doing it here as well
+  /// would deliver two notifications per accept.
   Future<void> acceptRide({
     required String rideId,
     required String passengerId,
@@ -802,67 +815,26 @@ class RideRepository {
     if (user == null) throw Exception('You must be logged in to accept rides.');
     if (user.id == passengerId) throw Exception('You cannot accept your own ride request.');
 
-    // Step 1: Read the current row to check it is still open
-    final currentRow = await _supabase
-        .from('ride_requests')
-        .select('id, status, driver_id')
-        .eq('id', rideId)
-        .maybeSingle();
-
-    if (currentRow == null) {
-      throw Exception('Ride request not found.');
-    }
-
-    final currentStatus = currentRow['status'] as String? ?? '';
-    final currentDriver = currentRow['driver_id'] as String?;
-
-    if (currentStatus != 'pending' || currentDriver != null) {
-      throw Exception('This ride request has already been accepted by another colleague.');
-    }
-
-    final nowUtc = DateTime.now().toUtc();
-    final deadline = nowUtc.add(const Duration(minutes: 5)).toIso8601String();
-
-    // Step 2: Update the row — driver_id, status, updated_at, and 5-minute confirmation deadline
-    await _supabase
-        .from('ride_requests')
-        .update({
-          'driver_id': user.id,
-          'status': 'accepted',
-          'confirmation_deadline': deadline,
-          'updated_at': nowUtc.toIso8601String(),
-        })
-        .eq('id', rideId)
-        .eq('status', 'pending');
-
-    // Step 3: Send notification to passenger
-    try {
-      final driverProfile = await _supabase
-          .from('profiles')
-          .select('full_name, employee_id')
-          .eq('id', user.id)
-          .maybeSingle();
-
-      final rawName = driverProfile?['full_name'] as String?;
-      final driverName = (rawName != null && rawName.trim().isNotEmpty && rawName.trim().toLowerCase() != 'colleague')
-          ? rawName.trim()
-          : (user.userMetadata?['full_name']?.toString() ??
-              (driverProfile?['employee_id'] != null ? 'Driver (${driverProfile!['employee_id']})' : 'A colleague'));
-
-      await _supabase.from('notifications').insert({
-        'user_id': passengerId,
-        'ride_id': rideId,
-        'title': 'Ride Offer Received! 🚗',
-        'message': '$driverName has offered you a lift. Please confirm or decline your ride within 5 minutes on the Home Screen.',
-        'type': 'ride_accepted',
-        'is_read': false,
-      });
-    } catch (notifErr) {
-      debugPrint('[acceptRide] Notification insert error: $notifErr');
-    }
+    await _supabase.rpc(
+      'accept_ride_request',
+      params: {'p_ride_id': rideId},
+    );
   }
 
-  /// Passenger confirms the driver's ride offer
+  /// Passenger confirms the driver's ride offer.
+  ///
+  /// Delegates entirely to the `confirm_ride_request` RPC, which locks the row,
+  /// verifies the caller owns it and that it is in `accepted` status, enforces
+  /// the 5-minute deadline (reverting the request to the open queue when it has
+  /// lapsed) and notifies the driver.
+  ///
+  /// The previous client-side pre-checks re-implemented the deadline logic
+  /// against the client clock, and the `catch (_)` fallback wrote `confirmed`
+  /// directly — bypassing the deadline entirely whenever the RPC errored. Both
+  /// are deliberately gone.
+  ///
+  /// [driverId] is retained for source compatibility with existing callers; the
+  /// RPC resolves the driver from the row itself.
   Future<void> confirmRide({
     required String rideId,
     String? driverId,
@@ -872,90 +844,22 @@ class RideRepository {
       throw Exception('You must be logged in to confirm rides.');
     }
 
-    // Step 1: Query current status and confirmation deadline
-    final currentRow = await _supabase
-        .from('ride_requests')
-        .select('id, status, driver_id, confirmation_deadline, updated_at, created_at')
-        .eq('id', rideId)
-        .eq('passenger_id', user.id)
-        .maybeSingle();
-
-    if (currentRow == null) {
-      throw Exception('Ride request not found or not owned by you.');
-    }
-
-    final currentStatus = currentRow['status'] as String? ?? '';
-    if (currentStatus != 'accepted' && currentStatus != 'pending_confirmation') {
-      throw Exception('Cannot confirm ride: Current status is "$currentStatus".');
-    }
-
-    // Verify 5-minute confirmation deadline
-    final nowUtc = DateTime.now().toUtc();
-    final deadlineRaw = currentRow['confirmation_deadline'];
-    DateTime? deadline = deadlineRaw != null ? DateTime.tryParse(deadlineRaw.toString()) : null;
-
-    if (deadline == null) {
-      final updatedRaw = currentRow['updated_at'] ?? currentRow['created_at'];
-      final updatedAt = updatedRaw != null ? DateTime.tryParse(updatedRaw.toString()) : null;
-      if (updatedAt != null) {
-        deadline = updatedAt.toUtc().add(const Duration(minutes: 5));
-      }
-    }
-
-    if (deadline != null && deadline.isBefore(nowUtc)) {
-      await _supabase
-          .from('ride_requests')
-          .update({
-            'driver_id': null,
-            'status': 'pending',
-            'confirmation_deadline': null,
-            'updated_at': nowUtc.toIso8601String(),
-          })
-          .eq('id', rideId);
-
-      throw Exception('Confirmation window expired. Your ride request has been returned to open requests.');
-    }
-
-    try {
-      await _supabase.rpc(
-        'confirm_ride_request',
-        params: {'p_ride_id': rideId},
-      );
-    } catch (_) {
-      await _supabase
-          .from('ride_requests')
-          .update({
-            'status': 'confirmed',
-            'updated_at': nowUtc.toIso8601String(),
-          })
-          .eq('id', rideId)
-          .eq('passenger_id', user.id);
-
-      final targetDriverId = driverId ?? currentRow['driver_id'] as String?;
-      if (targetDriverId != null) {
-        final profile = await _supabase
-            .from('profiles')
-            .select('full_name, employee_id')
-            .eq('id', user.id)
-            .maybeSingle();
-        final rawPassengerName = profile?['full_name'] as String?;
-        final name = (rawPassengerName != null && rawPassengerName.trim().isNotEmpty && rawPassengerName.trim().toLowerCase() != 'colleague')
-            ? rawPassengerName.trim()
-            : (user.userMetadata?['full_name']?.toString() ?? 'Your passenger');
-
-        await _supabase.from('notifications').insert({
-          'user_id': targetDriverId,
-          'ride_id': rideId,
-          'title': 'Ride Confirmed! ✅',
-          'message': '$name has confirmed the ride with you.',
-          'type': 'ride_confirmed',
-          'is_read': false,
-        });
-      }
-    }
+    await _supabase.rpc(
+      'confirm_ride_request',
+      params: {'p_ride_id': rideId},
+    );
   }
 
-  /// Driver marks the ride as completed (CRITICAL GUARD: ONLY allowed if status is 'confirmed')
+  /// Driver marks the ride as completed.
+  ///
+  /// Delegates entirely to the `complete_ride_request` RPC. The "must be
+  /// confirmed" guard previously lived only here in Dart, which meant anyone
+  /// calling the API directly could complete an unconfirmed ride; it has been
+  /// moved into the RPC (see `database/supabase_schema.sql`) so the rule holds
+  /// regardless of how the write arrives.
+  ///
+  /// [passengerId] is retained for source compatibility with existing callers;
+  /// the RPC resolves the passenger from the row and notifies them itself.
   Future<void> completeRide({
     required String rideId,
     String? passengerId,
@@ -963,80 +867,34 @@ class RideRepository {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('User is not authenticated');
 
-    // 1. Backend guard: Check that the ride status is actually confirmed
-    final current = await _supabase
-        .from('ride_requests')
-        .select('id, status, driver_id')
-        .eq('id', rideId)
-        .maybeSingle();
-
-    if (current == null) {
-      throw Exception('Ride request not found.');
-    }
-
-    final currentStatus = current['status'] as String? ?? '';
-    if (currentStatus != 'confirmed') {
-      throw Exception('Cannot complete ride: Passenger has not confirmed the ride offer yet.');
-    }
-
-    try {
-      await _supabase.rpc(
-        'complete_ride_request',
-        params: {'p_ride_id': rideId},
-      );
-    } catch (_) {
-      await _supabase
-          .from('ride_requests')
-          .update({'status': 'completed'})
-          .eq('id', rideId)
-          .eq('status', 'confirmed'); // Strictly ensure confirmed status before completing
-
-      if (passengerId != null) {
-        await _supabase.from('notifications').insert({
-          'user_id': passengerId,
-          'ride_id': rideId,
-          'title': 'Trip Completed 🌿',
-          'message': 'Your carpool commute is complete. Thank you for riding smart!',
-          'type': 'ride_completed',
-          'is_read': false,
-        });
-      }
-    }
+    await _supabase.rpc(
+      'complete_ride_request',
+      params: {'p_ride_id': rideId},
+    );
   }
 
-  /// Driver cancels their ride offer, returning the request back to the open queue
+  /// Driver cancels their ride offer, returning the request back to the open queue.
+  ///
+  /// Delegates entirely to the `cancel_ride_offer` RPC, which verifies the
+  /// caller is the assigned driver, clears the offer and notifies the passenger.
+  /// The previous `catch (_)` fallback wrote the same transition from the client
+  /// and is deliberately gone.
+  ///
+  /// [passengerId] is retained for source compatibility with existing callers;
+  /// the RPC resolves the passenger from the row and notifies them itself.
   Future<void> cancelRideOffer({
     required String rideId,
     required String passengerId,
   }) async {
     final user = _supabase.auth.currentUser;
-    if (user == null) return;
-
-    try {
-      await _supabase.rpc(
-        'cancel_ride_offer',
-        params: {'p_ride_id': rideId},
-      );
-    } catch (_) {
-      await _supabase
-          .from('ride_requests')
-          .update({
-            'driver_id': null,
-            'status': 'pending',
-            'confirmation_deadline': null,
-          })
-          .eq('id', rideId)
-          .eq('driver_id', user.id);
-
-      await _supabase.from('notifications').insert({
-        'user_id': passengerId,
-        'ride_id': rideId,
-        'title': 'Ride Offer Cancelled',
-        'message': 'The driver is unable to offer a ride. Your request is now open for other colleagues.',
-        'type': 'ride_cancelled',
-        'is_read': false,
-      });
+    if (user == null) {
+      throw Exception('You must be logged in to cancel a ride offer.');
     }
+
+    await _supabase.rpc(
+      'cancel_ride_offer',
+      params: {'p_ride_id': rideId},
+    );
   }
 
   /// Passenger declines/rejects a driver's ride offer, returning the request back to the open queue

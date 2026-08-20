@@ -5,7 +5,7 @@
 -- Every schema / RPC / policy change made by the Claude Code fix pass, in the
 -- order they must be applied, as one runnable script.
 --
--- Covers: F1, F2, F3, F4, F5.   Last updated: 2026-08-21
+-- Covers: F0 (prereqs), F1, F2, F3, F4, F5.   Last updated: 2026-08-21
 --
 -- WHY THIS FILE EXISTS
 --   None of these changes have been applied to any live database. They were
@@ -40,6 +40,29 @@
 --   statements, not their runtime behaviour. Whoever applies this should treat
 --   it as unvalidated and check the post-conditions at the end.
 -- =============================================================================
+
+
+-- =============================================================================
+-- F0 — PREREQUISITES (guarded; no-ops if already present)
+-- =============================================================================
+-- This script is a delta and assumes database/supabase_schema.sql is already
+-- deployed. It does NOT create the base tables or these functions, all of which
+-- must already exist:
+--     public.app_config, public.ride_completion_log, public.vehicles,
+--     public.ride_matches, public.driver_availability, public.notifications,
+--     public.expire_unconfirmed_ride_requests(),
+--     public.expire_past_slot_ride_requests()
+-- Because plpgsql binds names late, a missing one of these will NOT fail when
+-- the functions below are created — it fails at first CALL instead. Verify with
+-- post-condition 0.
+--
+-- confirmation_deadline is the exception, and the reason this section exists:
+-- it is read and written throughout supabase_schema.sql (13 references) but is
+-- never defined by any file in this repository — not in the ride_requests
+-- CREATE TABLE, and not in any ALTER. If the live database has it, it was added
+-- out of band. F1.2 below writes to it, so rather than assume, add it guarded.
+ALTER TABLE public.ride_requests
+    ADD COLUMN IF NOT EXISTS confirmation_deadline TIMESTAMP WITH TIME ZONE;
 
 
 -- =============================================================================
@@ -432,6 +455,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ride_requests_client_request_id
 -- =============================================================================
 -- A clean run is not proof the fixes are in force; the pg_cron block above
 -- succeeds even when it schedules nothing.
+--
+-- 0. The prerequisite functions this script calls actually exist. An empty
+--    result means run_ride_request_expiry() will fail at runtime even though it
+--    was created successfully:
+--      SELECT proname FROM pg_proc
+--      WHERE proname IN ('expire_unconfirmed_ride_requests',
+--                        'expire_past_slot_ride_requests');
 --
 -- 1. Four policies on ride_requests, and no FOR ALL among them:
 --      SELECT policyname, cmd, qual, with_check

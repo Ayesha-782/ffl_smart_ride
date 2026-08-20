@@ -1,5 +1,5 @@
 # Fix Progress Summary
-Last updated: 2026-08-21
+Last updated: 2026-08-21 — F1-F5 complete, F6 awaiting go-ahead
 
 Branch: `main` (gate 3 of FIX_PLAN.md overridden by the user in-session; auto-push to
 `origin main` after each fix authorized by the user directly).
@@ -11,8 +11,8 @@ Baseline commit: `4193035`.
 | F2 | RLS policy hole on ride_requests | DONE | `336c09c` | YES |
 | F3 | Server-side expiry scheduling | **NEEDS_DECISION** (migration written; needs pg_cron enabled) | `4f65de2` | YES |
 | F4 | Defense-in-depth constraints | DONE | `2fc9913` | YES |
-| F5 | Idempotency on ride-request creation | DONE (narrower than it sounds — see below) | (this commit) | YES |
-| F6 | Broader hardening | BLOCKED BY PLAN — needs explicit go-ahead | — | — |
+| F5 | Idempotency on ride-request creation | DONE (narrower than it sounds — see below) | `945a2cd` | YES |
+| F6 | Broader hardening | **NEEDS_DECISION** — proposal written, no code | (this commit) | YES |
 
 ## Verification baseline
 

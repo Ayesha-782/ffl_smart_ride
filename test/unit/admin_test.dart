@@ -1,10 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ffl_smart_ride/core/models/ride_completion_log.dart';
 import 'package:ffl_smart_ride/core/models/user_profile.dart';
 import 'package:ffl_smart_ride/core/models/vehicle.dart';
 import 'package:ffl_smart_ride/features/admin/data/admin_repository.dart';
-import 'package:ffl_smart_ride/features/admin/screens/admin_dashboard_shell.dart';
 import 'package:ffl_smart_ride/features/admin/services/pdf_report_service.dart';
 
 void main() {

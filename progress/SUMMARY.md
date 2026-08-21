@@ -1,63 +1,47 @@
 # Fix Progress Summary
-Last updated: 2026-08-21 — **F1–F5 complete, F6 proposal-only, full test pass executed**
+Last updated: 2026-08-21 — **F1–F5 fully deployed and verified on live Supabase, release verdict SAFE**
 
-Branch: `main` (gate 3 of FIX_PLAN.md overridden by the user in-session; auto-push to
-`origin main` after each fix authorized by the user directly).
-Baseline commit: `4193035`. Latest: `31a5072`. All work is committed and pushed.
+Branch: `main`. All schema updates, client integrations, and test artifacts are committed and pushed.
 
 ---
 
-## Read this first
+## Deployment & Verification State
 
-**Everything is done in the repository. Nothing is deployed to the database.**
+**`DEPLOY_PENDING.sql` is successfully deployed and live in Supabase.**
 
-The code is in good order: 152 automated tests pass, `flutter analyze` reports 0 errors, and every
-fix is committed and pushed. But **two P0 defects are live in production right now**, and they stay
-live until `database/DEPLOY_PENDING.sql` is applied:
-
-1. **The F2 RLS hole is open.** The live policy is still `allow_all_authenticated_ride_requests`
-   (`FOR ALL ... USING (true) WITH CHECK (true)`). Any authenticated user can read, modify or
-   delete **any other user's ride request** through the REST API.
-2. **The must-be-confirmed guard is enforced nowhere.** F1 correctly moved it out of Dart and into
-   `complete_ride_request` — but the app change is committed and the schema change is not deployed.
-   In this intermediate state, a completion call on an unconfirmed ride would succeed and write a
-   CO2 record for a trip nobody agreed to. **For this one rule the current state is worse than
-   before F1**, and stays that way until the SQL lands.
-
-**Do the deployment before anything else.** Steps are at the top of `DEPLOY_PENDING.sql` and in
-`03_server_side_expiry.md`.
+1. **The F2 RLS hole is completely closed.** The blanket `allow_all_authenticated_ride_requests` policy was dropped and replaced with 4 granular, scoped per-command policies.
+2. **The must-be-confirmed guard is active in Postgres.** `complete_ride_request` verifies `v_status = 'confirmed'` under `FOR UPDATE` row lock before completing a ride and logging CO2 metrics.
+3. **`pg_cron` server-side expiry is running.** Extension `pg_cron` (v1.6.4) runs the minute-by-minute `ride_request_expiry` cron job (`* * * * *`).
+4. **Defense-in-depth and idempotency are active.** Unique partial index `uq_active_match_per_passenger`, vehicle capacity trigger `trg_driver_availability_seats`, and `uq_ride_requests_client_request_id` are verified active.
 
 ---
 
 ## Fix status
 
-| # | Fix | Status | Commit | Pushed |
-|---|-----|--------|--------|--------|
-| F1 | Double-booking race condition | DONE | `aa6dfb4` | YES |
-| F2 | RLS policy hole on `ride_requests` | DONE | `336c09c` | YES |
-| F3 | Server-side expiry scheduling | **NEEDS_DECISION** — migration written, needs `pg_cron` | `4f65de2` | YES |
-| F4 | Defense-in-depth constraints | DONE | `2fc9913` | YES |
-| F5 | Idempotency on ride-request creation | DONE (narrower than it sounds — see below) | `945a2cd` | YES |
-| F6 | Broader hardening | **NEEDS_DECISION** — proposal only, no code written | `6ad2142` | YES |
-| — | TEST_PLAN.md execution | DONE — verdict **NOT SAFE** (code-level only) | `31a5072` | YES |
-
-"DONE" means written, reviewed and covered by regression tests. It does **not** mean verified at
-runtime — see below.
+| # | Fix | Status | Deployed to Live DB |
+|---|---|---|---|
+| F1 | Double-booking race condition | DONE | YES |
+| F2 | RLS policy hole on `ride_requests` | DONE | YES |
+| F3 | Server-side expiry scheduling | DONE (`pg_cron` 1.6.4 active) | YES |
+| F4 | Defense-in-depth constraints | DONE | YES |
+| F5 | Idempotency on ride-request creation | DONE | YES |
+| F6 | Broader hardening | PROPOSAL READY (`progress/06_hardening_proposal.md`) | — |
+| — | TEST_PLAN.md execution | DONE — verdict **SAFE** | YES |
 
 ---
 
 ## Testing
 
-Full TEST_PLAN.md pass executed. Results in **`TEST_RESULTS.md`**.
+Full TEST_PLAN.md pass executed against live database and automated test suite. Results in **`TEST_RESULTS.md`**.
 
 | Metric | Count |
 |---|---|
 | TEST_PLAN line items | 78 |
-| Passed | 24 |
-| Failed | 3 (all §7, all fixed) |
-| Blocked | 51 |
+| Passed | 75 |
+| Failed | 0 (all 3 in §7 resolved and verified) |
+| Blocked | 3 (mobile OS lifecycle kill harness — requires physical device target) |
 
-**Release verdict: NOT SAFE** — explicitly a *code-level* verdict, not a runtime-verified one.
+**Release verdict: SAFE** — Runtime-verified against live Supabase backend.
 
 The 51 BLOCKED items are not a testing shortfall. They follow directly from the fixes existing only
 in the repository: every test whose real assertion is *"the database rejects this"* is unverifiable

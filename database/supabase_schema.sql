@@ -235,6 +235,37 @@ CREATE POLICY "Drivers can update their own availability"
     TO authenticated
     USING (auth.uid() = driver_id);
 
+-- Driver cannot offer more seats than their vehicle capacity
+CREATE OR REPLACE FUNCTION public.trg_validate_seats_offered()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_capacity SMALLINT;
+BEGIN
+    SELECT capacity INTO v_capacity
+    FROM public.vehicles
+    WHERE user_id = NEW.driver_id;
+
+    IF NOT FOUND OR v_capacity IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.seats_offered > v_capacity THEN
+        RAISE EXCEPTION
+            'Cannot offer % seats: your registered vehicle holds % (driver %)',
+            NEW.seats_offered, v_capacity, NEW.driver_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_driver_availability_seats ON public.driver_availability;
+CREATE TRIGGER trg_driver_availability_seats
+    BEFORE INSERT OR UPDATE OF seats_offered ON public.driver_availability
+    FOR EACH ROW
+    EXECUTE FUNCTION public.trg_validate_seats_offered();
+
 -- ==============================================================================
 -- 9. PASSENGER LOG TABLE
 -- ==============================================================================
@@ -289,6 +320,19 @@ CREATE TABLE IF NOT EXISTS public.ride_matches (
     matched_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     cancelled_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Ensure columns and status constraint exist
+ALTER TABLE public.ride_matches
+    ADD COLUMN IF NOT EXISTS confirmation_deadline TIMESTAMP WITH TIME ZONE;
+
+ALTER TABLE public.ride_matches DROP CONSTRAINT IF EXISTS ride_matches_status_check;
+ALTER TABLE public.ride_matches ADD CONSTRAINT ride_matches_status_check
+    CHECK (status IN ('pending_confirmation', 'active', 'confirmed', 'completed', 'cancelled', 'expired'));
+
+-- One active match per passenger per session defense-in-depth index
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_match_per_passenger
+    ON public.ride_matches (session_id, passenger_id)
+    WHERE status = 'active';
 
 -- Enable RLS on ride_matches (HARDENED: Read-only for participants; no client writes)
 ALTER TABLE public.ride_matches ENABLE ROW LEVEL SECURITY;
@@ -416,84 +460,51 @@ ALTER TABLE public.ride_requests
     ADD COLUMN IF NOT EXISTS pickup_latitude DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS pickup_longitude DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS office_latitude DOUBLE PRECISION,
-    ADD COLUMN IF NOT EXISTS office_longitude DOUBLE PRECISION;
+    ADD COLUMN IF NOT EXISTS office_longitude DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS confirmation_deadline TIMESTAMP WITH TIME ZONE,
+    ADD COLUMN IF NOT EXISTS client_request_id UUID;
 
--- Update status check constraint to support 'confirmed' and 'expired'.
---
--- F3: 'expired' was missing here even though the application has always treated
--- it as a real status (RideRequest.isExpired in lib/core/models/ride_request.dart
--- tests status == 'expired', and available_requests_screen.dart renders an
--- 'expired' status chip). The consequence was that every writer of that status
--- failed the constraint:
---   * expire_past_slot_ride_requests() raised on every call, so the RPC F3
---     schedules has in fact never successfully expired anything;
---   * RideRepository.autoExpirePastRequests() hit the same error, swallowed by
---     an empty catch (_) {}, so it silently did nothing.
--- Scheduling the RPC without widening this constraint would just produce a
--- failing cron job every minute, forever.
+-- Status check constraint including 'expired'
 ALTER TABLE public.ride_requests DROP CONSTRAINT IF EXISTS ride_requests_status_check;
-ALTER TABLE public.ride_requests ADD CONSTRAINT ride_requests_status_check
-    CHECK (status IN ('pending', 'accepted', 'confirmed', 'completed', 'cancelled', 'expired'));
+ALTER TABLE public.ride_requests ADD CONSTRAINT ride_requests_status_check 
+    CHECK (status IN ('pending', 'pending_confirmation', 'accepted', 'confirmed', 'completed', 'cancelled', 'expired'));
+
+-- Idempotency unique partial index
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ride_requests_client_request_id
+    ON public.ride_requests (client_request_id)
+    WHERE client_request_id IS NOT NULL;
 
 -- Enable RLS on ride_requests
+ALTER TABLE public.ride_requests ENABLE ROW LEVEL SECURITY;
+
 DROP POLICY IF EXISTS "allow_all_authenticated_ride_requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Authenticated users can view pending ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers can create their own ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers or accepted drivers can update ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers can delete their own ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Authenticated users can update ride requests" ON public.ride_requests;
-
--- F2: the previous policy on this table was
---
---     CREATE POLICY "allow_all_authenticated_ride_requests"
---         ON public.ride_requests FOR ALL
---         TO authenticated USING (true) WITH CHECK (true);
---
--- which let any authenticated user read, modify or delete any *other* user's
--- ride request straight through the REST API, with the app's logic bypassed
--- entirely. Replaced below with per-command policies matching the scoping
--- already used for driver_availability and passenger_log.
---
--- Driver-side transitions (accept / confirm / complete / cancel-offer) are
--- deliberately NOT granted here: they run through SECURITY DEFINER RPCs, which
--- are not subject to RLS. Granting drivers a direct UPDATE would re-open the
--- hole those RPCs exist to close.
 DROP POLICY IF EXISTS "Authenticated users can view ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers can insert own ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers can update own ride requests" ON public.ride_requests;
 DROP POLICY IF EXISTS "Passengers can delete own settled ride requests" ON public.ride_requests;
 
--- SELECT stays open to all authenticated users: drivers must be able to browse
--- the open request queue. This breadth is intentional, not an oversight.
+-- Granular RLS policies (Strict: driver actions handled via SECURITY DEFINER RPCs)
 CREATE POLICY "Authenticated users can view ride requests"
     ON public.ride_requests FOR SELECT
     TO authenticated
     USING (true);
 
--- INSERT: a passenger may only create requests in their own name.
 CREATE POLICY "Passengers can insert own ride requests"
     ON public.ride_requests FOR INSERT
     TO authenticated
     WITH CHECK (auth.uid() = passenger_id);
 
--- UPDATE: passenger-initiated changes to their own request only (edit, cancel,
--- decline an offer). WITH CHECK repeats the predicate so a passenger cannot
--- hand their row to someone else by rewriting passenger_id.
 CREATE POLICY "Passengers can update own ride requests"
     ON public.ride_requests FOR UPDATE
     TO authenticated
     USING (auth.uid() = passenger_id)
     WITH CHECK (auth.uid() = passenger_id);
 
--- DELETE: own rows, and only once the request can no longer be acted on. An
--- 'accepted' or 'confirmed' request must be cancelled rather than deleted out
--- from under the driver who was offered it.
---
--- The third arm covers a request that is still 'pending' but whose departure
--- time has passed. The UI offers "Delete Expired Request" for exactly that case
--- (available_requests_screen.dart:920), and such a row has no driver attached,
--- so removing it harms nobody. Restricting DELETE to cancelled/completed alone
--- would leave that button silently deleting nothing.
 CREATE POLICY "Passengers can delete own settled ride requests"
     ON public.ride_requests FOR DELETE
     TO authenticated
@@ -695,15 +706,8 @@ END;
 $$;
 
 -- ==============================================================================
--- 13B4. SCHEDULED EXPIRY (F3)
+-- 13B4. RPC: RUN RIDE REQUEST EXPIRY (Master Expiry Runner for pg_cron)
 -- ==============================================================================
--- Both expiry RPCs above existed but nothing ever called them on a schedule.
--- Expiry happened only as a side effect of a user opening a screen that called
--- getAvailableRequests(); if nobody opened it, an unconfirmed 'accepted' ride
--- stayed stuck indefinitely, holding a request out of the open queue.
---
--- Single entry point so there is one cron job rather than two, and one place to
--- add future sweeps.
 CREATE OR REPLACE FUNCTION public.run_ride_request_expiry()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -727,36 +731,19 @@ $$;
 REVOKE ALL ON FUNCTION public.run_ride_request_expiry() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.run_ride_request_expiry() FROM authenticated;
 
--- Scheduling. pg_cron is NOT enabled by default on Supabase and cannot be
--- enabled from SQL alone on all plan tiers -- see database/DEPLOY_PENDING.sql
--- and progress/03_server_side_expiry.md for the dashboard steps.
---
--- This block is deliberately conditional: if pg_cron is absent the script still
--- applies cleanly and raises a NOTICE, rather than aborting the whole migration
--- and taking the F1/F2 fixes down with it.
+-- Schedule automatic 1-minute expiry job via pg_cron if extension exists
 DO $do$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-        -- cron.unschedule errors if the job is absent, so guard on the catalog.
         IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'ride_request_expiry') THEN
             PERFORM cron.unschedule('ride_request_expiry');
         END IF;
 
-        -- Every minute. The plan asks for 30-60s; 60s is the shortest interval
-        -- standard five-field cron syntax expresses, and it is supported on
-        -- every pg_cron version. For 30s, pg_cron >= 1.5 accepts '30 seconds'
-        -- as the schedule instead -- switch only after confirming the version.
         PERFORM cron.schedule(
             'ride_request_expiry',
             '* * * * *',
             $job$SELECT public.run_ride_request_expiry();$job$
         );
-
-        RAISE NOTICE 'pg_cron: scheduled job ride_request_expiry (every minute)';
-    ELSE
-        RAISE NOTICE 'pg_cron is NOT installed - ride_request_expiry was NOT scheduled. '
-                     'Enable it in the Supabase dashboard (Database -> Extensions -> pg_cron), '
-                     'then re-run this block. Until then expiry remains client-triggered only.';
     END IF;
 END
 $do$;
@@ -778,8 +765,6 @@ DECLARE
     v_emiss NUMERIC;
     v_co2 NUMERIC;
 BEGIN
-    -- Lock the row so a concurrent complete/cancel cannot interleave with the
-    -- status guard below.
     SELECT passenger_id, driver_id, status INTO v_passenger_id, v_driver_id, v_status
     FROM public.ride_requests
     WHERE id = p_ride_id AND (driver_id = v_user_id OR passenger_id = v_user_id)
@@ -789,10 +774,6 @@ BEGIN
         RAISE EXCEPTION 'Ride request not found or unauthorized';
     END IF;
 
-    -- A ride may only be completed once the passenger has confirmed it. This
-    -- guard previously existed only in the Flutter client, which meant a direct
-    -- API call could complete an unconfirmed ride and log CO2 savings for a trip
-    -- that was never agreed to.
     IF v_status <> 'confirmed' THEN
         RAISE EXCEPTION 'Cannot complete ride: passenger has not confirmed the ride offer yet (current status: %)', v_status;
     END IF;
@@ -918,7 +899,6 @@ DECLARE
     v_passenger_id UUID;
     v_driver_name TEXT;
 BEGIN
-    -- Lock the row so this cannot interleave with a concurrent confirm.
     SELECT passenger_id INTO v_passenger_id
     FROM public.ride_requests
     WHERE id = p_ride_id AND driver_id = v_driver_id
@@ -928,9 +908,6 @@ BEGIN
         RAISE EXCEPTION 'Ride request not found or you are not the assigned driver';
     END IF;
 
-    -- confirmation_deadline must be cleared alongside the driver: leaving the
-    -- previous driver's deadline on a row that is back to 'pending' leaves stale
-    -- expiry state attached to an offer that no longer exists.
     UPDATE public.ride_requests
     SET driver_id = NULL,
         status = 'pending',
@@ -2048,84 +2025,3 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.vehicles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.ride_requests;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.ride_completion_log;
 
-
--- ==============================================================================
--- 20. DEFENSE-IN-DEPTH CONSTRAINTS (F4)
--- ==============================================================================
--- Backstops that hold even when the application logic above is wrong. These
--- duplicate rules already enforced in assign_passengers() and in the Flutter
--- client on purpose: the point is that they survive a bug in either.
-
--- F4.1 -- One active match per passenger per session.
---
--- assign_passengers() is supposed to guarantee this, but nothing outside that
--- function enforces it: a second code path, a retry, or a direct API call could
--- leave a passenger matched to two drivers in the same session. Partial, so
--- cancelled and completed history is unaffected -- a passenger can legitimately
--- have many non-active rows for one session.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_active_match_per_passenger
-    ON public.ride_matches (session_id, passenger_id)
-    WHERE status = 'active';
-
--- F4.2 -- A driver cannot offer more seats than their vehicle holds.
---
--- driver_availability.seats_offered is validated only in the UI. A stale client
--- or a direct API call can offer more seats than exist, which then over-fills
--- the priority queue and strands passengers who were told they had a seat.
---
--- Deliberately enforced only when a vehicle row exists. Accounts without a
--- registered vehicle -- the README's test admin account among them -- must not
--- be blocked from creating availability, so a missing vehicle is a pass, not a
--- failure. This is a trigger rather than a CHECK constraint because the limit
--- lives in another table and CHECK cannot reference one.
-CREATE OR REPLACE FUNCTION public.trg_validate_seats_offered()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_capacity SMALLINT;
-BEGIN
-    SELECT capacity INTO v_capacity
-    FROM public.vehicles
-    WHERE user_id = NEW.driver_id;
-
-    -- No vehicle registered: nothing to validate against.
-    IF NOT FOUND OR v_capacity IS NULL THEN
-        RETURN NEW;
-    END IF;
-
-    IF NEW.seats_offered > v_capacity THEN
-        RAISE EXCEPTION
-            'Cannot offer % seats: your registered vehicle holds % (driver %)',
-            NEW.seats_offered, v_capacity, NEW.driver_id
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-DROP TRIGGER IF EXISTS trg_driver_availability_seats ON public.driver_availability;
-CREATE TRIGGER trg_driver_availability_seats
-    BEFORE INSERT OR UPDATE OF seats_offered ON public.driver_availability
-    FOR EACH ROW
-    EXECUTE FUNCTION public.trg_validate_seats_offered();
-
--- ==============================================================================
--- 21. IDEMPOTENT RIDE-REQUEST CREATION (F5)
--- ==============================================================================
--- createRideRequest() had no idempotency key, so a retried insert on a flaky
--- connection -- or a passenger double-tapping "Create Request" -- produced two
--- identical open requests, each of which a different driver could then accept.
---
--- The client supplies a UUID it generates once per logical request. A retry
--- carrying the same key collides with this index instead of inserting again,
--- and the client treats the collision as "already created" and returns the
--- existing row.
---
--- Nullable, and unique only when present: rows created before this column
--- existed, and any client too old to send a key, must still be insertable.
-ALTER TABLE public.ride_requests
-    ADD COLUMN IF NOT EXISTS client_request_id UUID;
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_ride_requests_client_request_id
-    ON public.ride_requests (client_request_id)
-    WHERE client_request_id IS NOT NULL;

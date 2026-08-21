@@ -12,7 +12,7 @@ Baseline commit: `4193035`.
 | F3 | Server-side expiry scheduling | **NEEDS_DECISION** (migration written; needs pg_cron enabled) | `4f65de2` | YES |
 | F4 | Defense-in-depth constraints | DONE | `2fc9913` | YES |
 | F5 | Idempotency on ride-request creation | DONE (narrower than it sounds — see below) | `945a2cd` | YES |
-| F6 | Broader hardening | **NEEDS_DECISION** — proposal written, no code | (this commit) | YES |
+| F6 | Broader hardening | **NEEDS_DECISION** — proposal written, no code | `6ad2142` | YES |
 
 ## Verification baseline
 

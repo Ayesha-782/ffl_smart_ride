@@ -75,21 +75,41 @@ class RideCompletionLog {
     };
   }
 
-  /// Calculates the CO2 saved for a completed carpool trip
+  /// Calculates the CO2 saved for a completed carpool trip.
+  ///
+  /// Negative inputs are treated as zero rather than propagated. A saving
+  /// cannot be negative, and these values feed `ride_completion_log` and the
+  /// public leaderboard — a negative result would silently subtract from a
+  /// driver's lifetime total rather than fail visibly. `distance_km` and
+  /// `emission_factor_kg_per_km` are admin-editable via `app_config`, so a
+  /// negative value is reachable through configuration, not just through a bug.
   static double calculateCo2Saved({
     required double routeDistanceKm,
     required double emissionFactorKgPerKm,
     required int passengerCount,
   }) {
+    if (routeDistanceKm <= 0 ||
+        emissionFactorKgPerKm <= 0 ||
+        passengerCount <= 0) {
+      return 0.0;
+    }
     return routeDistanceKm * emissionFactorKgPerKm * passengerCount;
   }
 
-  /// Calculates the fuel saved (in liters) for a completed carpool trip
+  /// Calculates the fuel saved (in liters) for a completed carpool trip.
+  ///
+  /// Negative inputs are treated as zero, for the same reason as
+  /// [calculateCo2Saved].
   static double calculateFuelSaved({
     required double routeDistanceKm,
     required double fuelConsumptionLPerKm,
     required int passengerCount,
   }) {
+    if (routeDistanceKm <= 0 ||
+        fuelConsumptionLPerKm <= 0 ||
+        passengerCount <= 0) {
+      return 0.0;
+    }
     return routeDistanceKm * fuelConsumptionLPerKm * passengerCount;
   }
 }
